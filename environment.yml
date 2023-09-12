@@ -1,0 +1,16 @@
+name: uics
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - matplotlib=3.7.1
+  - pip=23.1.2  
+  - pip:
+    - jax==0.4.14
+    - "--editable=git+https://github.com/deepmind/distrax@releases/tag/v0.1.3"
+    - "--editable=git+https://github.com/JaxGaussianProcesses/JaxKern@releases/tag/v0.0.5"
+    - "--editable=git+https://github.com/Hesterhuijsdens/blackjax/releases/tag/v0.9.6"
+ 
+ 
+ 
