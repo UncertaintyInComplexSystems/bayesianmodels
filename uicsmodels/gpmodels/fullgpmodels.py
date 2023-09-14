@@ -147,7 +147,7 @@ class FullGPModel(AbstractModel):
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method')
         
-class FullLatentGPMode(FullGPModel):
+class FullLatentGPModel(FullGPModel):
 
     """The latent Gaussian process model.
 
