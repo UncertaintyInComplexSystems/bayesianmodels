@@ -1,8 +1,11 @@
 import jax
 import blackjax
 
+from jax.typing import ArrayLike
+from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
-from blackjax.types import Array, PRNGKey, PyTree
+
+ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 __all__ = ['inference_loop', 'smc_inference_loop']
 

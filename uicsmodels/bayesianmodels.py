@@ -7,7 +7,7 @@ from jax.typing import ArrayLike
 from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
 
-from blackjax.types import ArrayTree
+ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 class GibbsState(NamedTuple):
 

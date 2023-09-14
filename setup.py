@@ -5,8 +5,8 @@ setup(
     version='0.0.1',
     packages=find_packages(),
     install_requires=[
-        'distrax==0.1.4',
+        'blackjax'.
         'jaxkern @ git+https://github.com/JaxGaussianProcesses/JaxKern.git',
-        'blackjax'
+        'distrax==0.1.4'        
     ]
 )

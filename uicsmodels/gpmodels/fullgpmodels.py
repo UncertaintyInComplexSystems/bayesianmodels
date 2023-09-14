@@ -3,8 +3,11 @@ from uicsmodels.gpmodels.meanfunctions import Zero
 from uicsmodels.gpmodels.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.sampling import inference_loop, smc_inference_loop
 
+from jax.typing import ArrayLike
+from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
-from blackjax.types import ArrayTree
+
+ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 import jax
 import distrax as dx

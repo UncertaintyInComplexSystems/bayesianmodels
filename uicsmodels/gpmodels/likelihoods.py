@@ -4,8 +4,11 @@ import jax.scipy as jsp
 import distrax as dx
 from blackjax.types import Array, PRNGKey, ArrayTree
 
+from jax.typing import ArrayLike
+from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
-from jaxtyping import Array, Float
+
+ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 
 def inv_probit(x: Float[Array, "N 1"]) -> Float[Array, "N 1"]:
