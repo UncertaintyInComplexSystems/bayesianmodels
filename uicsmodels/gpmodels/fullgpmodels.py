@@ -146,6 +146,23 @@ class FullGPModel(AbstractModel):
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method')
         
+    #
+    def smc_init_fn(self, position: ArrayTree, kwargs):
+        """Simply wrap the position dictionary in a GibbsState object. 
+
+        Args:
+            position: dict
+                Current assignment of the state values
+            kwargs: not used in our Gibbs kernel
+        Returns:
+            A Gibbs state object.
+        """
+        return GibbsState(position)
+
+    #
+
+#
+        
 class FullLatentGPModel(FullGPModel):
 
     """The latent Gaussian process model.
