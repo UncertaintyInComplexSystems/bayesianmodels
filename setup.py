@@ -5,7 +5,7 @@ setup(
     version='0.0.1',
     packages=find_packages(),
     install_requires=[
-        'blackjax==0.9.6',
+        'blackjax @ git@github.com:Hesterhuijsdens/blackjax.git',
         'jaxkern @ git+https://github.com/JaxGaussianProcesses/JaxKern.git',
         'distrax==0.1.4'        
     ]
