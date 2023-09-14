@@ -104,13 +104,13 @@ class FullGPModel(AbstractModel):
 
         if mode == 'smc':
             smc = adaptive_tempered_smc(
-                self.logprior_fn(),
-                self.loglikelihood_fn(),
-                self.gibbs_fn,
-                self.smc_init_fn,
-                sampling_parameters.get('gibbs_parameters', dict()),
-                resampling.systematic,
-                sampling_parameters.get('target_ess', 0.5),
+                logprior_fn=self.logprior_fn(),
+                loglikelihood_fn=self.loglikelihood_fn(),
+                mcmc_step_fn=self.gibbs_fn,
+                mcmc_init_fn=self.smc_init_fn,
+                mcmc_parameters=sampling_parameters.get('gibbs_parameters', dict()),
+                resampling_fn=resampling.systematic,
+                target_ess=sampling_parameters.get('target_ess', 0.5),
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)
             )
 
