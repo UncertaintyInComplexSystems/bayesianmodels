@@ -15,7 +15,7 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
 import blackjax
-from blackjax import elliptical_slice, random_walk, adaptive_tempered_smc
+from blackjax import elliptical_slice, rmh, adaptive_tempered_smc
 import blackjax.smc.resampling as resampling
 
 mcmc_proposal_dist = blackjax.mcmc.random_walk.normal
@@ -288,7 +288,7 @@ class FullLatentGPMode(FullGPModel):
             for varname, varval in variables.items():
                 m += varval.shape[0] if varval.shape else 1
 
-            kernel = random_walk.additive_random_walk(logdensity, mcmc_proposal_dist(sigma=stepsize * jnp.eye(m)))
+            kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
             substate = kernel.init(variables)
             substate, info_ = kernel.step(key, substate)
             return substate.position, info_
