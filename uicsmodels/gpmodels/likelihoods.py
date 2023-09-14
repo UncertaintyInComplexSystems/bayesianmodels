@@ -10,7 +10,7 @@ from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iter
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 
-def inv_probit(x: Float[Array, "N 1"]) -> Float[Array, "N 1"]:
+def inv_probit(x):
     """Compute the inverse probit function.
 
     Args:
