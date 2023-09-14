@@ -36,7 +36,6 @@ class FullGPModel(AbstractModel):
         self.mean_fn = mean_fn
         self.kernel = cov_fn
         self.param_priors = priors
-        print('GP model initialized')
         # TODO:
         # - assert whether all trainable parameters have been assigned priors
         # - add defaults/fixed values for parameters without prior
@@ -262,7 +261,7 @@ class FullLatentGPModel(FullGPModel):
 
         """
 
-        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
+        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: float = 0.01):
             """The MCMC step for sampling hyperparameters.
 
             This updates the hyperparameters of the mean, covariance function
@@ -409,7 +408,7 @@ class FullLatentGPModel(FullGPModel):
             A function that computes the log-likelihood of the model given a
             state.
         """
-        def loglikelihood_fn_(state: GibbsState) -> Float:
+        def loglikelihood_fn_(state: GibbsState) -> float:
             # position = state.position
             position = getattr(state, 'position', state)
             phi = {param: position[param] for param in
@@ -432,7 +431,7 @@ class FullLatentGPModel(FullGPModel):
 
         """
 
-        def logprior_fn_(state: GibbsState) -> Float:
+        def logprior_fn_(state: GibbsState) -> float:
             position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
             logprob = 0
             for component, params in self.param_priors.items():
