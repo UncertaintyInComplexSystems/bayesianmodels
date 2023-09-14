@@ -2,12 +2,11 @@ from abc import ABC, abstractmethod
 import jax.numpy as jnp
 import jax.scipy as jsp
 import distrax as dx
-from blackjax.types import Array, PRNGKey, ArrayTree
 
+from jax import Array
 from jax.typing import ArrayLike
 from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
-
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 
