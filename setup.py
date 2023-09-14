@@ -5,10 +5,9 @@ setup(
     version='0.0.1',
     packages=find_packages(),
     install_requires=[
-        'jax',
         'jaxtyping',
-        'distrax @ git+https://github.com/deepmind/distrax.git@f6e656c',
+        'distrax==0.1.4',
         'jaxkern @ git+https://github.com/JaxGaussianProcesses/JaxKern.git',
-        'blackjax @ git+https://github.com/Hesterhuijsdens/blackjax.git'
+        'blackjax'
     ]
 )

@@ -1,9 +1,10 @@
-from uicsmodels.bayesianmodels import AbstractModel
+from uicsmodels.bayesianmodels import AbstractModel, GibbsState
 from uicsmodels.gpmodels.meanfunctions import Zero
 
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
 
 import jax.numpy as jnp
+from jax.random import PRNGKey
 
 
 
@@ -26,3 +27,6 @@ class FullGPModel(AbstractModel):
         # TODO:
         # - assert whether all trainable parameters have been assigned priors
         # - add defaults/fixed values for parameters without prior
+
+    def gibbs_fn(self, key: PRNGKey, state: GibbsState, **kwars):
+        raise NotImplementedError
