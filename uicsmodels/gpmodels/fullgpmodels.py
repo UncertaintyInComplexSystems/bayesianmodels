@@ -18,7 +18,6 @@ import blackjax
 from blackjax import elliptical_slice, rmh, adaptive_tempered_smc
 import blackjax.smc.resampling as resampling
 
-mcmc_proposal_dist = blackjax.mcmc.random_walk.normal
 jitter = 1e-6
 
 
