@@ -1,7 +1,7 @@
 from uicsmodels.bayesianmodels import AbstractModel, GibbsState, ArrayTree
 from uicsmodels.gpmodels.meanfunctions import Zero
 from uicsmodels.gpmodels.likelihoods import AbstractLikelihood, Gaussian
-from uicsmodels.sampling import inference_loop, smc_inference_loop
+from uicsmodels.sampling.inference import inference_loop, smc_inference_loop
 
 from jax import Array
 from jax.typing import ArrayLike
