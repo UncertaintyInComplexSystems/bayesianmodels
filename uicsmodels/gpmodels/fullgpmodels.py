@@ -272,7 +272,7 @@ class FullLatentGPModel(FullGPModel):
 
         #
 
-    def gibbs_fn(self, key, state, **kwargs):
+    def gibbs_fn(self, key, state, loglik_fn__, temperature=1.0, **mcmc_parameters):
         """The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
@@ -312,7 +312,7 @@ class FullLatentGPModel(FullGPModel):
             """
             key, _ = jrnd.split(key)
             m = 0
-            for varname, varval in variables.items():
+            for varval in variables.values():
                 m += varval.shape[0] if varval.shape else 1
 
             kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
@@ -332,7 +332,6 @@ class FullLatentGPModel(FullGPModel):
         #
         
         position = state.position.copy()
-        temperature = kwargs.get('temperature', 1.0)
 
         """Sample the latent GP using:
 
