@@ -49,10 +49,22 @@ class FullGPModel(AbstractModel):
         raise NotImplementedError
 
     #
-    def init_fn(self, key: PRNGKey, nu_particles: int = 1):
-        raise NotImplementedError
-    
-    #    
+    def init_fn(self, key: PRNGKey, num_particles=1):
+        """Initial state for MCMC/SMC.
+
+        """
+
+        initial_position = dict()
+        for component, comp_priors in self.param_priors.items():
+            for param, param_dist in comp_priors.items():
+                key, _ = jrnd.split(key)
+                if num_particles > 1:
+                    initial_position[param] = param_dist.sample(seed=key, sample_shape=(num_particles,))
+                else:
+                    initial_position[param] = param_dist.sample(seed=key)
+        return GibbsState(position=initial_position)
+
+    # 
     def gibbs_fn(self, key: PRNGKey, state: GibbsState, **kwars):
         raise NotImplementedError
     
