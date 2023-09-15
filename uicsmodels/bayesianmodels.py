@@ -4,6 +4,7 @@ from typing import Any, Iterable, Mapping, Union
 import jax
 from jax import Array
 from jax.typing import ArrayLike
+from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]

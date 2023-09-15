@@ -5,6 +5,7 @@ from uicsmodels.sampling.inference import inference_loop, smc_inference_loop
 
 from jax import Array
 from jax.typing import ArrayLike
+from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
@@ -290,7 +291,7 @@ class FullLatentGPModel(FullGPModel):
 
         """
 
-        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: float = 0.01):
+        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
             """The MCMC step for sampling hyperparameters.
 
             This updates the hyperparameters of the mean, covariance function
@@ -436,7 +437,7 @@ class FullLatentGPModel(FullGPModel):
             A function that computes the log-likelihood of the model given a
             state.
         """
-        def loglikelihood_fn_(state: GibbsState) -> float:
+        def loglikelihood_fn_(state: GibbsState) -> Float:
             # position = state.position
             position = getattr(state, 'position', state)
             phi = {param: position[param] for param in
@@ -459,7 +460,7 @@ class FullLatentGPModel(FullGPModel):
 
         """
 
-        def logprior_fn_(state: GibbsState) -> float:
+        def logprior_fn_(state: GibbsState) -> Float:
             position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
             logprob = 0
             for component, params in self.param_priors.items():
@@ -586,4 +587,248 @@ class FullLatentGPModel(FullGPModel):
         pass
 
     #
+#
+
+class FullMarginalGPModel(FullGPModel):
+    """The marginal Gaussian process model.
+
+    In case the likelihood of the GP is Gaussian, we marginalize out the latent
+    GP f for (much) more efficient inference.
+
+    The marginal Gaussian process model consists of observations (y), generated
+    by a Gaussian observation model with hyperparameter sigma as input. The
+    latent GP itself is parametrized by a mean function (mu) and a covariance
+    function (cov). These can have optional hyperparameters (psi) and (theta).
+
+    The generative model is given by:
+
+    .. math::
+        psi     &\sim p(\psi)\\
+        theta   &\sim p(\theta) \\
+        sigma     &\sim p(\sigma) \\
+        y       &\sim N(mu, cov + \sigma^2 I_n)
+
+    """
+
+    def __init__(self, X, y,
+                 cov_fn: Optional[Callable],
+                 mean_fn: Callable = None,
+                 priors: Dict = None):
+        super().__init__(X, y, cov_fn, mean_fn, priors)
+
+    #
+    def gibbs_fn(self, key, state, loglik_fn__, temperature=1.0, **mcmc_parameters):
+        """The Gibbs MCMC kernel.
+
+        The Gibbs kernel step function takes a state and returns a new state. In
+        the latent GP model, the latent GP (f) is first updated, then the
+        parameters of the mean (psi) and covariance function (theta), and lastly
+        the parameters of the observation model (phi).
+
+        Args:
+            key:
+                The jax.random.PRNGKey
+            state: GibbsState
+                The current state in the MCMC sampler
+        Returns:
+            GibbsState
+
+        """
+
+        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
+            """The MCMC step for sampling hyperparameters.
+
+            This updates the hyperparameters of the mean, covariance function
+            and likelihood, if any. Currently, this uses a random-walk
+            Metropolis step function, but other Blackjax options are available.
+
+            Args:
+                key:
+                    The jax.random.PRNGKey
+                logdensity: Callable
+                    Function that returns a logdensity for a given set of variables
+                variables: Dict
+                    The set of variables to sample and their current values
+                stepsize: float
+                    The stepsize of the random walk
+            Returns:
+                RMHState, RMHInfo
+
+            """
+            key, _ = jrnd.split(key)
+            m = 0
+            for varval in variables.values():
+                m += varval.shape[0] if varval.shape else 1
+
+            kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+            substate = kernel.init(variables)
+            substate, info_ = kernel.step(key, substate)
+            return substate.position, info_
+
+        #
+        position = state.position.copy()
+
+        loglikelihood_fn_ = self.loglikelihood_fn()
+        logprior_fn_ = self.logprior_fn()
+
+        logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
+        new_position, info_ = mcmc_step(key, logdensity, position)
+
+        return GibbsState(
+            position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
+
+    #
+    def loglikelihood_fn(self) -> Callable:
+        """Returns the log-likelihood function for the model given a state.
+
+        Args:
+            None
+
+        Returns:
+            A function that computes the log-likelihood of the model given a
+            state.
+        """
+        jitter = 1e-6
+
+        def loglikelihood_fn_(state: GibbsState) -> Float:
+            position = getattr(state, 'position', state)
+            psi = {param: position[param] for param in self.param_priors['mean']} if 'mean' in self.param_priors else {}
+            theta = {param: position[param] for param in
+                     self.param_priors['kernel']} if 'kernel' in self.param_priors else {}
+
+            sigma = state['obs_noise']
+            mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
+            cov = self.kernel.cross_covariance(params=theta,
+                                               x=self.X,
+                                               y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.n)
+            logprob = dx.MultivariateNormalFullCovariance(mean, cov).log_prob(self.y)
+            return logprob
+
+        #
+        return loglikelihood_fn_
+
+    #
+    def logprior_fn(self) -> Callable:
+        """Returns the log-prior function for the model given a state.
+
+        Args:
+            None
+        Returns:
+            A function that computes the log-prior of the model given a state.
+
+        """
+
+        def logprior_fn_(state: GibbsState) -> Float:
+            position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
+            logprob = 0
+            for component, params in self.param_priors.items():
+                # mean, kernel, likelihood
+                for param, dist in params.items():
+                    # parameters per component
+                    logprob += jnp.sum(dist.log_prob(position[param]))
+            return logprob
+
+        #
+        return logprior_fn_
+
+    #
+    def predict_f(self, key: PRNGKey, x_pred: PyTree, num_subsample=-1):
+        """Predict the latent f on unseen pointsand
+
+        This function takes the approximated posterior (either by MCMC or SMC)
+        and predicts new latent function evaluations f^*.
+
+        Args:
+            key: PRNGKey
+            x_pred: x^*; the queried locations.
+            num_subsample: By default, we return one predictive sample for each
+            posterior sample. While accurate, this can be memory-intensive; this
+            parameter can be used to thin the MC output to every n-th sample.
+
+        Returns:
+            f_samples: An array of samples of f^* from p(f^* | x^*, x, y)
+
+
+        todo:
+        - predict using either SMC or MCMC output
+        - predict from prior if desired
+        """
+
+        @jax.jit
+        def sample_predictive_f(key, x_pred: PyTree, **state_variables):
+            """Sample latent f for new points x_pred given one posterior sample.
+
+            See Rasmussen & Williams. We are sampling from the posterior predictive for
+            the latent GP f, at this point not concerned with an observation model yet.
+
+            We have [f, f*]^T ~ N(0, KK), where KK is a block matrix:
+
+            KK = [[K(x, x), K(x, x*)], [K(x, x*)^T, K(x*, x*)]]
+
+            This results in the conditional
+
+            f* | x, x*, f ~ N(mu, cov), where
+
+            mu = K(x*, x)K(x,x)^-1 f
+            cov = K(x*, x*) - K(x*, x) K(x, x)^-1 K(x, x*)
+
+            Args:
+                key: The jrnd.PRNGKey object
+                x_pred: The prediction locations x*
+                state_variables: A sample from the posterior
+
+            Returns:
+                A single posterior predictive sample f*
+
+            """
+
+            def get_parameters_for(component):
+                """Extract parameter sampled values per model component for current
+                position.
+
+                """
+                return {param: state_variables[param] for param in
+                        self.param_priors[component]} if component in self.param_priors else {}
+
+            #
+
+            jitter = 1e-6
+
+            # to implement!
+            psi = get_parameters_for('mean')
+            mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
+            theta = get_parameters_for('kernel')
+            sigma = get_parameters_for('likelihood')['obs_noise']
+
+            kXX = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
+            kXX += sigma ** 2 * jnp.eye(*kXX.shape)  # add observation noise
+            kxX = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
+            kxx = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
+            for k in [kXX, kxX, kxx]:
+                k += jitter * jnp.eye(*k.shape)
+
+            L = jnp.linalg.cholesky(kXX + jitter * jnp.eye(self.n))
+            alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))
+            v = jnp.linalg.solve(L, kxX)
+            predictive_mean = jnp.dot(kxX.T, alpha)
+            predictive_var = kxx - jnp.dot(v.T, v) + jitter * jnp.eye(*kxx.shape)
+
+            C = jnp.linalg.cholesky(predictive_var)
+            z = jrnd.normal(key, shape=(len(x_pred),))
+
+            f_samples = predictive_mean + jnp.dot(C, z)
+            return f_samples
+
+        #
+
+        num_particles = self.particles.particles['obs_noise'].shape[0]
+        key_samples = jrnd.split(key, num_particles)
+
+        f_pred = jax.vmap(sample_predictive_f,
+                          in_axes=(0, None))(key_samples, x_pred, **self.particles.particles)
+        return f_pred
+
+    #
+
+
 #
