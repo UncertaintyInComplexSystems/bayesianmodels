@@ -732,7 +732,7 @@ class FullMarginalGPModel(FullGPModel):
         return logprior_fn_
 
     #
-    def predict_f(self, key: PRNGKey, x_pred: PyTree, num_subsample=-1):
+    def predict_f(self, key: PRNGKey, x_pred: ArrayTree, num_subsample=-1):
         """Predict the latent f on unseen pointsand
 
         This function takes the approximated posterior (either by MCMC or SMC)
@@ -755,7 +755,7 @@ class FullMarginalGPModel(FullGPModel):
         """
 
         @jax.jit
-        def sample_predictive_f(key, x_pred: PyTree, **state_variables):
+        def sample_predictive_f(key, x_pred: ArrayTree, **state_variables):
             """Sample latent f for new points x_pred given one posterior sample.
 
             See Rasmussen & Williams. We are sampling from the posterior predictive for
