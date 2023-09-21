@@ -120,13 +120,13 @@ class BayesianModel(ABC):
                 logdensity_fn = lambda state: loglikelihood_fn(state) + logprior_fn(state)
                 kernel = kernel_type(logdensity_fn, **kernel_parameters)
                 step_fn = kernel.step
-                initial_state = kernel.init(self.init_fn(key_init))
+                initial_state = kernel.init(self.init_fn(key_init).position)
 
             states = inference_loop(key_inference,
                                     step_fn,
                                     initial_state,
                                     num_burn + num_samples)
-            self.states = states if mode == 'gibbs' else states.position.position
+            self.states = states if mode == 'gibbs' else states.position
             return states
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
