@@ -43,7 +43,7 @@ class BayesianModel(ABC):
         """A wrapper for training the GP model.
 
         An interface to Blackjax' MCMC or SMC inference loops, tailored to the
-        current latent GP model.
+        current Bayesian model.
 
         Args:
             key: jrnd.KeyArray
@@ -74,18 +74,27 @@ class BayesianModel(ABC):
 
         key, key_init, key_inference = jrnd.split(key, 3)
 
-        if mode == 'gibbs-in-smc':
+        if mode == 'gibbs-in-smc' or mode == 'mcmc-in-smc':
+            if mode == 'gibbs-in-smc':
+                mcmc_step_fn = self.gibbs_fn
+                mcmc_init_fn = self.smc_init_fn
+            elif mode == 'mcmc-in-smc':
+                kernel_type = sampling_parameters.get('kernel')
+                kernel_parameters = sampling_parameters.get('kernel_parameters')
+                mcmc_step_fn = kernel_type.build_kerel(),
+                mcmc_init_fn = kernel_type.init,
+            
             smc = adaptive_tempered_smc(
                 logprior_fn=self.logprior_fn(),
                 loglikelihood_fn=self.loglikelihood_fn(),
-                mcmc_step_fn=self.gibbs_fn,
-                mcmc_init_fn=self.smc_init_fn,
+                mcmc_step_fn=mcmc_step_fn,
+                mcmc_init_fn=mcmc_init_fn,
                 mcmc_parameters=sampling_parameters.get('gibbs_parameters', dict()),
                 resampling_fn=resampling.systematic,
                 target_ess=sampling_parameters.get('target_ess', 0.5),
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)
             )
-            num_particles = sampling_parameters.get('num_particles', 10_000)
+            num_particles = sampling_parameters.get('num_particles', 1_000)
             initial_particles = self.init_fn(key_init,
                                              num_particles=num_particles)
             initial_smc_state = smc.init(initial_particles.position)
@@ -95,38 +104,30 @@ class BayesianModel(ABC):
             self.particles = particles
             self.marginal_likelihood = marginal_likelihood
             return particles, num_iter, marginal_likelihood
-        elif mode == 'gibbs':
-            initial_state = self.init_fn(key_init)
-
+        elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
 
+            if mode == 'gibbs':
+                step_fn = self.gibbs_fn
+                initial_state = self.init_fn(key_init)
+            elif mode == 'mcmc':
+                kernel_type = sampling_parameters.get('kernel')
+                kernel_parameters = sampling_parameters.get('kernel_parameters')
+                loglikelihood_fn = self.loglikelihood_fn()
+                logprior_fn = self.logprior_fn()
+
+                logdensity_fn = lambda state: loglikelihood_fn(state) + logprior_fn(state)
+                kernel = kernel_type(logdensity_fn, **kernel_parameters)
+                step_fn = kernel.step
+                initial_state = kernel.init(self.init_fn(key_init))
+
             states = inference_loop(key_inference,
-                                    self.gibbs_fn,
+                                    step_fn,
                                     initial_state,
                                     num_burn + num_samples)
             self.states = states
             return states
-        elif mode == 'mcmc':
-            kernel_type = sampling_parameters.get('kernel')
-            kernel_parameters = sampling_parameters.get('kernel_parameters')
-            num_burn = sampling_parameters.get('num_burn', 10_000)
-            num_samples = sampling_parameters.get('num_samples', 10_000)
-
-            loglikelihood_fn = self.loglikelihood_fn()
-            logprior_fn = self.logprior_fn()
-
-            logdensity_fn = lambda state: loglikelihood_fn(state) + logprior_fn(state)
-            kernel = kernel_type(logdensity_fn, **kernel_parameters)
-            initial_state = kernel.init(self.init_fn(key_init))
-            states = inference_loop(key_inference,
-                                    kernel.step, 
-                                    initial_state, 
-                                    num_burn + num_samples)
-            self.states = states.position
-            return self.states
-        elif mode == 'mcmc-in-smc':
-            pass
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 
