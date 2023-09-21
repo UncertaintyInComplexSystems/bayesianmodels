@@ -72,7 +72,7 @@ class BayesianModel(ABC):
         if sampling_parameters is None:
             sampling_parameters = dict()
 
-        key, key_init, key_inference = jrd.split(key, 3)
+        key, key_init, key_inference = jrnd.split(key, 3)
 
         if mode == 'gibbs-in-smc':
             smc = adaptive_tempered_smc(
