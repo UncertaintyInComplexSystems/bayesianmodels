@@ -39,7 +39,7 @@ class BayesianModel(ABC):
         pass
 
     #
-    def inference(self, key: PRNGKey, mode='smc', sampling_parameters: Dict = None):
+    def inference(self, key: PRNGKey, mode='gibbs-in-smc', sampling_parameters: Dict = None):
         """A wrapper for training the GP model.
 
         An interface to Blackjax' MCMC or SMC inference loops, tailored to the
@@ -51,7 +51,7 @@ class BayesianModel(ABC):
                 inference.
             mode: {'mcmc', 'smc'}
                 The desired inference approach. Defaults to SMC, which is
-                generally preffered.
+                generally prefered.
             sampling_parameters: dict
                 Optional settings with defaults for the inference procedure.
 
@@ -72,7 +72,9 @@ class BayesianModel(ABC):
         if sampling_parameters is None:
             sampling_parameters = dict()
 
-        if mode == 'smc':
+        key, key_init, key_inference = jrd.split(key, 3)
+
+        if mode == 'gibbs-in-smc':
             smc = adaptive_tempered_smc(
                 logprior_fn=self.logprior_fn(),
                 loglikelihood_fn=self.loglikelihood_fn(),
@@ -83,37 +85,50 @@ class BayesianModel(ABC):
                 target_ess=sampling_parameters.get('target_ess', 0.5),
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)
             )
-
             num_particles = sampling_parameters.get('num_particles', 10_000)
-            key_init, key_smc = jrnd.split(key, 2)
-
             initial_particles = self.init_fn(key_init,
                                              num_particles=num_particles)
-            # We need to initialize SMC with a dictionary
             initial_smc_state = smc.init(initial_particles.position)
-
-            num_iter, particles, marginal_likelihood = smc_inference_loop(key_smc,
+            num_iter, particles, marginal_likelihood = smc_inference_loop(key_inference,
                                                                           smc.step,
                                                                           initial_smc_state)
-
             self.particles = particles
             self.marginal_likelihood = marginal_likelihood
             return particles, num_iter, marginal_likelihood
-        elif mode == 'mcmc':
-            key_init, key_mcmc = jrnd.split(key, 2)
+        elif mode == 'gibbs':
             initial_state = self.init_fn(key_init)
 
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
 
-            states = inference_loop(key_mcmc,
+            states = inference_loop(key_inference,
                                     self.gibbs_fn,
                                     initial_state,
                                     num_burn + num_samples)
             self.states = states
             return states
+        elif mode == 'mcmc':
+            kernel_type = sampling_parameters.get('kernel')
+            kernel_parameters = sampling_parameters.get('kernel_parameters')
+            num_burn = sampling_parameters.get('num_burn', 10_000)
+            num_samples = sampling_parameters.get('num_samples', 10_000)
+
+            loglikelihood_fn = self.loglikelihood_fn()
+            logprior_fn = self.logprior_fn()
+
+            logdensity_fn = lambda state: loglikelihood_fn(state) + logprior_fn(state)
+            kernel = kernel_type(logdensity_fn, **kernel_parameters)
+            initial_state = kernel.init(self.init_fn(key_init))
+            states = inference_loop(key_inference,
+                                    kernel.step, 
+                                    initial_state, 
+                                    num_burn + num_samples)
+            self.states = states.position
+            return self.states
+        elif mode == 'mcmc-in-smc':
+            pass
         else:
-            raise NotImplementedError(f'{mode} is not implemented as inference method')
+            raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 
     #
     def plot_priors(self, axes=None):
