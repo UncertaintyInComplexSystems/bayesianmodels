@@ -191,7 +191,7 @@ class FullLatentGPModel(FullGPModel):
 
         #
 
-    def gibbs_fn(self, key, state, loglik_fn__=None, temperature=1.0, **mcmc_parameters):
+    def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
         """The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
@@ -539,7 +539,7 @@ class FullMarginalGPModel(FullGPModel):
         super().__init__(X, y, cov_fn, mean_fn, priors)
 
     #
-    def gibbs_fn(self, key, state, loglik_fn__=None, temperature=1.0, **mcmc_parameters):
+    def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
         """The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
