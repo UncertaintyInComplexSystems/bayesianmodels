@@ -126,7 +126,7 @@ class BayesianModel(ABC):
                                     step_fn,
                                     initial_state,
                                     num_burn + num_samples)
-            self.states = states if mode == 'gibbs' else states.position
+            self.states = states #if mode == 'gibbs' else states.position
             return states
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')

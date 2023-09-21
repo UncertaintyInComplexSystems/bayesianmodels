@@ -742,12 +742,16 @@ class FullMarginalGPModel(FullGPModel):
             return f_samples
 
         #
-
-        num_particles = self.particles.particles['obs_noise'].shape[0]
-        key_samples = jrnd.split(key, num_particles)
+        if hasattr(self, 'particles'):
+            samples = self.particles.particles
+        elif hasattr(self, 'states'):
+            samples = self.states.position
+                
+        num_samples = samples['obs_noise'].shape[0]
+        key_samples = jrnd.split(key, num_samples)
 
         f_pred = jax.vmap(sample_predictive_f,
-                          in_axes=(0, None))(key_samples, x_pred, **self.particles.particles)
+                          in_axes=(0, None))(key_samples, x_pred, **samples)
         return f_pred
 
     #
