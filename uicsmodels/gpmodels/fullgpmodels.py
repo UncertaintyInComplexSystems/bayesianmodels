@@ -1,13 +1,12 @@
-from uicsmodels.bayesianmodels import AbstractModel, GibbsState, ArrayTree
+from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.gpmodels.meanfunctions import Zero
 from uicsmodels.gpmodels.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.sampling.inference import inference_loop, smc_inference_loop
 
 from jax import Array
-from jax.typing import ArrayLike
 from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
-from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
+from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 import jax
@@ -15,14 +14,13 @@ import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
-import blackjax
 from blackjax import elliptical_slice, rmh, adaptive_tempered_smc
 import blackjax.smc.resampling as resampling
 
 jitter = 1e-6
 
 
-class FullGPModel(AbstractModel):
+class FullGPModel(BayesianModel):
 
     def __init__(self, X, y,
                  cov_fn: Optional[Callable],

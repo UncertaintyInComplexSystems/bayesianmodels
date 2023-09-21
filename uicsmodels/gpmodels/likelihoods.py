@@ -4,14 +4,12 @@ import jax.scipy as jsp
 import distrax as dx
 
 from jax import Array
-from jax.typing import ArrayLike
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
-from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
+from typing import Union, Dict, Any, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 
-def inv_probit(x):
+def inv_probit(x) -> Float:
     """Compute the inverse probit function.
 
     Args:
