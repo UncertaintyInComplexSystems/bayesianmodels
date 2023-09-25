@@ -40,15 +40,6 @@ class FullGPModel(BayesianModel):
         # - add defaults/fixed values for parameters without prior
 
     #
-    def __get_component_parameters(position, component):
-        """Extract parameter sampled values per model component for current
-        position.
-
-        """
-        return {param: position[param] for param in
-                self.param_priors[component]} if component in self.param_priors else {}
-
-    #
     def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
         raise NotImplementedError
 
@@ -138,6 +129,15 @@ class FullLatentGPModel(FullGPModel):
         # TODO:
         # - assert whether all trainable parameters have been assigned priors
         # - add defaults/fixed values for parameters without prior
+
+    #
+    def __get_component_parameters(position, component):
+        """Extract parameter sampled values per model component for current
+        position.
+
+        """
+        return {param: position[param] for param in
+                self.param_priors[component]} if component in self.param_priors else {}
 
     #    
     def init_fn(self, key, num_particles=1):
