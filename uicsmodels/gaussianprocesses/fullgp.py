@@ -240,12 +240,15 @@ class FullLatentGPModel(FullGPModel):
         latent_sampler = elliptical_slice(loglikelihood_fn_,
                                           mean=mean,
                                           cov=cov)
-        f = position['f']
-        state_f = latent_sampler.init(f)
-        key, _ = jrnd.split(key)
-        state_f, info_f = latent_sampler.step(key, state_f)
-        f = state_f.position
-        position['f'] = state_f.position
+        #f = position['f']
+        #state_f = latent_sampler.init(f)
+        #key, _ = jrnd.split(key)
+        #state_f, info_f = latent_sampler.step(key, state_f)
+        #f = state_f.position
+        #position['f'] = state_f.position
+        
+        position['f'] = update_correlated_gaussian(key, position['f'], loglikelihood_fn_, mean, cov)
+        
 
         if len(psi):
             """Sample parameters of the mean function using: 
@@ -259,7 +262,7 @@ class FullLatentGPModel(FullGPModel):
                 for param, val in psi_.items():
                     log_pdf += jnp.sum(self.param_priors['mean'][param].log_prob(val))
                 mean = self.mean_fn.mean(params=psi_, x=self.X).flatten()
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(f)
+                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
                 return log_pdf
 
             #
@@ -282,7 +285,7 @@ class FullLatentGPModel(FullGPModel):
                 for param, val in theta_.items():
                     log_pdf += jnp.sum(self.param_priors['kernel'][param].log_prob(val))
                 cov_ = self.kernel.cross_covariance(params=theta_, x=self.X, y=self.X) + jitter * jnp.eye(self.n)
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov_).log_prob(f)
+                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov_).log_prob(position['f'])
                 return log_pdf
 
             #
@@ -302,7 +305,7 @@ class FullLatentGPModel(FullGPModel):
                 log_pdf = 0
                 for param, val in phi_.items():
                     log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=f, y=self.y))
+                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
                 return log_pdf
 
             #
