@@ -227,13 +227,13 @@ class FullLatentGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        likelihood_params = self.__get_component_parameters(position, 'likelihood')
+        likelihood_params = super.__get_component_parameters(position, 'likelihood')
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
-        mean_params = self.__get_component_parameters(position, 'mean')
+        mean_params = super.__get_component_parameters(position, 'mean')
         mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
 
-        cov_params = self.__get_component_parameters(position, 'kernel')
+        cov_params = super.__get_component_parameters(position, 'kernel')
         cov = self.kernel.cross_covariance(params=cov_params,
                                             x=self.X, y=self.X) + jitter * jnp.eye(self.n)
         
