@@ -260,7 +260,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(subkey, logdensity_fn_, mean_params, stepsize=0.1)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
 
@@ -284,7 +284,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(subkey, logdensity_fn_, cov_params, stepsize=0.1)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, cov_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -305,7 +305,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(subkey, logdensity_fn_, likelihood_params, stepsize=0.1)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, likelihood_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -526,44 +526,13 @@ class FullMarginalGPModel(FullGPModel):
 
         """
 
-        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
-            """The MCMC step for sampling hyperparameters.
-
-            This updates the hyperparameters of the mean, covariance function
-            and likelihood, if any. Currently, this uses a random-walk
-            Metropolis step function, but other Blackjax options are available.
-
-            Args:
-                key:
-                    The jax.random.PRNGKey
-                logdensity: Callable
-                    Function that returns a logdensity for a given set of variables
-                variables: Dict
-                    The set of variables to sample and their current values
-                stepsize: float
-                    The stepsize of the random walk
-            Returns:
-                RMHState, RMHInfo
-
-            """
-            key, _ = jrnd.split(key)
-            m = 0
-            for varval in variables.values():
-                m += varval.shape[0] if varval.shape else 1
-
-            kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
-            substate = kernel.init(variables)
-            substate, info_ = kernel.step(key, substate)
-            return substate.position, info_
-
-        #
         position = state.position.copy()
 
         loglikelihood_fn_ = self.loglikelihood_fn()
         logprior_fn_ = self.logprior_fn()
 
         logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-        new_position, info_ = mcmc_step(key, logdensity, position)
+        new_position, info_ = update_metropolis(key, logdensity, position)
 
         return GibbsState(
             position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
