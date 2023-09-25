@@ -40,6 +40,15 @@ class FullGPModel(BayesianModel):
         # - add defaults/fixed values for parameters without prior
 
     #
+    def __get_component_parameters(position, component):
+        """Extract parameter sampled values per model component for current
+        position.
+
+        """
+        return {param: position[param] for param in
+                self.param_priors[component]} if component in self.param_priors else {}
+
+    #
     def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
         raise NotImplementedError
 
@@ -130,7 +139,7 @@ class FullLatentGPModel(FullGPModel):
         # - assert whether all trainable parameters have been assigned priors
         # - add defaults/fixed values for parameters without prior
 
-    #
+    #    
     def init_fn(self, key, num_particles=1):
         """Initialization of the Gibbs state.
 
@@ -210,17 +219,6 @@ class FullLatentGPModel(FullGPModel):
             GibbsState
 
         """
-
-        
-        def get_component_parameters(position, component):
-            """Extract parameter sampled values per model component for current
-            position.
-
-            """
-            return {param: position[param] for param in
-                    self.param_priors[component]} if component in self.param_priors else {}
-
-        #
         
         position = state.position.copy()
 
@@ -229,13 +227,13 @@ class FullLatentGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        likelihood_params = get_component_parameters(position, 'likelihood')
+        likelihood_params = self.__get_component_parameters(position, 'likelihood')
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
-        mean_params = get_component_parameters(position, 'mean')
+        mean_params = self.__get_component_parameters(position, 'mean')
         mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
 
-        cov_params = get_component_parameters(position, 'kernel')
+        cov_params = self.__get_component_parameters(position, 'kernel')
         cov = self.kernel.cross_covariance(params=cov_params,
                                             x=self.X, y=self.X) + jitter * jnp.eye(self.n)
         
