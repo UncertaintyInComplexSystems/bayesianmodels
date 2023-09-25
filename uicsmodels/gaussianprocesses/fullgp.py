@@ -1,6 +1,6 @@
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
-from uicsmodels.gpmodels.meanfunctions import Zero
-from uicsmodels.gpmodels.likelihoods import AbstractLikelihood, Gaussian
+from uicsmodels.gaussianprocesses.meanfunctions import Zero
+from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 
 from jax import Array
 from jaxtyping import Float
