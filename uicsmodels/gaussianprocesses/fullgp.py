@@ -241,7 +241,7 @@ class FullLatentGPModel(FullGPModel):
                                           cov=cov)
 
         key, subkey = jrnd.split(key)
-        position['f'] = update_correlated_gaussian(subkey, position['f'], loglikelihood_fn_, mean, cov)
+        position['f'], f_info = update_correlated_gaussian(subkey, position['f'], loglikelihood_fn_, mean, cov)
 
         if len(mean_params):
             """Sample parameters of the mean function using: 
@@ -260,7 +260,7 @@ class FullLatentGPModel(FullGPModel):
 
             #
             key, subkey = jrnd.split(key)
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=0.1)
+            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
             for param, val in sub_state.items():
                 position[param] = val
 
@@ -284,7 +284,7 @@ class FullLatentGPModel(FullGPModel):
 
             #
             key, subkey = jrnd.split(key)
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, cov_params, stepsize=0.1)
+            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, cov_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -305,7 +305,7 @@ class FullLatentGPModel(FullGPModel):
 
             #
             key, subkey = jrnd.split(key)
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, likelihood_params, stepsize=0.1)
+            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
             for param, val in sub_state.items():
                 position[param] = val
         #

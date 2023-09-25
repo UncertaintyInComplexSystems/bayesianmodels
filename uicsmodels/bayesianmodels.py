@@ -89,7 +89,7 @@ class BayesianModel(ABC):
                 loglikelihood_fn=self.loglikelihood_fn(),
                 mcmc_step_fn=mcmc_step_fn,
                 mcmc_init_fn=mcmc_init_fn,
-                mcmc_parameters=sampling_parameters.get('gibbs_parameters', dict()),
+                mcmc_parameters=sampling_parameters.get('mcmc_parameters', dict()),
                 resampling_fn=resampling.systematic,
                 target_ess=sampling_parameters.get('target_ess', 0.5),
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)

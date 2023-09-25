@@ -90,8 +90,8 @@ def update_correlated_gaussian(key, f_current, loglikelihood_fn_, mean, cov):
                                     cov=cov)
 
     ess_state = elliptical_slice_sampler.init(f_current)    
-    ess_state, info_f = elliptical_slice_sampler.step(key, ess_state)
-    return ess_state.position
+    ess_state, ess_info = elliptical_slice_sampler.step(key, ess_state)
+    return ess_state.position, ess_info
 
 #
 def update_metropolis(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
@@ -119,8 +119,8 @@ def update_metropolis(key, logdensity: Callable, variables: Dict, stepsize: Floa
         m += varval.shape[0] if varval.shape else 1
 
     kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
-    substate = kernel.init(variables)
-    substate, info_ = kernel.step(key, substate)
-    return substate.position, info_
+    rmh_state = kernel.init(variables)
+    rmh_state, rmh_info = kernel.step(key, rmh_state)
+    return rmh_state.position, rmh_info
 
 #
