@@ -284,7 +284,8 @@ class FullLatentGPModel(FullGPModel):
 
             #
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, cov_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
+            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, cov_params, 
+                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('kernel', 0.1))
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -305,7 +306,8 @@ class FullLatentGPModel(FullGPModel):
 
             #
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
+            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, 
+                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('likelihood', 0.1))
             for param, val in sub_state.items():
                 position[param] = val
         #
