@@ -219,47 +219,6 @@ class FullLatentGPModel(FullGPModel):
             GibbsState
 
         """
-
-        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
-            """The MCMC step for sampling hyperparameters.
-
-            This updates the hyperparameters of the mean, covariance function
-            and likelihood, if any. Currently, this uses a random-walk
-            Metropolis step function, but other Blackjax options are available.
-
-            Args:
-                key:
-                    The jax.random.PRNGKey
-                logdensity: Callable
-                    Function that returns a logdensity for a given set of variables
-                variables: Dict
-                    The set of variables to sample and their current values
-                stepsize: float
-                    The stepsize of the random walk
-            Returns:
-                RMHState, RMHInfo
-
-            """
-            key, _ = jrnd.split(key)
-            m = 0
-            for varval in variables.values():
-                m += varval.shape[0] if varval.shape else 1
-
-            kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
-            substate = kernel.init(variables)
-            substate, info_ = kernel.step(key, substate)
-            return substate.position, info_
-
-        #
-        def get_parameters_for(component):
-            """Extract parameter sampled values per model component for current
-            position.
-
-            """
-            return {param: position[param] for param in
-                    self.param_priors[component]} if component in self.param_priors else {}
-
-        #
         
         position = state.position.copy()
 
@@ -268,13 +227,13 @@ class FullLatentGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        phi = get_parameters_for('likelihood')
+        phi = self.__get_component_parameters(position, 'likelihood')
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=phi, f=f_, y=self.y))
 
-        psi = get_parameters_for('mean')
+        psi = self.__get_component_parameters(position, 'mean')
         mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
 
-        theta = get_parameters_for('kernel')
+        theta = self.__get_component_parameters(position, 'kernel')
         cov = self.kernel.cross_covariance(params=theta,
                                            x=self.X, y=self.X) + jitter * jnp.eye(self.n)
 
