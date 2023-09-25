@@ -1,6 +1,7 @@
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.gpmodels.meanfunctions import Zero
 from uicsmodels.gpmodels.likelihoods import AbstractLikelihood, Gaussian
+from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 
 from jax import Array
 from jaxtyping import Float
@@ -13,7 +14,8 @@ import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
-from blackjax import elliptical_slice, rmh
+#from blackjax import elliptical_slice, rmh
+
 
 jitter = 1e-6
 
@@ -209,38 +211,8 @@ class FullLatentGPModel(FullGPModel):
 
         """
 
-        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
-            """The MCMC step for sampling hyperparameters.
-
-            This updates the hyperparameters of the mean, covariance function
-            and likelihood, if any. Currently, this uses a random-walk
-            Metropolis step function, but other Blackjax options are available.
-
-            Args:
-                key:
-                    The jax.random.PRNGKey
-                logdensity: Callable
-                    Function that returns a logdensity for a given set of variables
-                variables: Dict
-                    The set of variables to sample and their current values
-                stepsize: float
-                    The stepsize of the random walk
-            Returns:
-                RMHState, RMHInfo
-
-            """
-            key, _ = jrnd.split(key)
-            m = 0
-            for varval in variables.values():
-                m += varval.shape[0] if varval.shape else 1
-
-            kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
-            substate = kernel.init(variables)
-            substate, info_ = kernel.step(key, substate)
-            return substate.position, info_
-
-        #
-        def get_parameters_for(component):
+        
+        def get_component_parameters(position, component):
             """Extract parameter sampled values per model component for current
             position.
 
@@ -257,32 +229,26 @@ class FullLatentGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        phi = get_parameters_for('likelihood')
-        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=phi, f=f_, y=self.y))
+        likelihood_params = get_component_parameters(position, 'likelihood')
+        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
-        psi = get_parameters_for('mean')
-        mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
+        mean_params = get_component_parameters(position, 'mean')
+        mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
 
-        theta = get_parameters_for('kernel')
-        cov = self.kernel.cross_covariance(params=theta,
-                                           x=self.X, y=self.X) + jitter * jnp.eye(self.n)
+        cov_params = get_component_parameters(position, 'kernel')
+        cov = self.kernel.cross_covariance(params=cov_params,
+                                            x=self.X, y=self.X) + jitter * jnp.eye(self.n)
+        
+        position['f'] = update_correlated_gaussian(key, state, position['f'], 
+                                                   loglikelihood_fn_, mean, cov)
 
-        latent_sampler = elliptical_slice(loglikelihood_fn_,
-                                          mean=mean,
-                                          cov=cov)
-        f = position['f']
-        state_f = latent_sampler.init(f)
-        key, _ = jrnd.split(key)
-        state_f, info_f = latent_sampler.step(key, state_f)
-        f = state_f.position
-        position['f'] = state_f.position
-
-        if len(psi):
+        if len(mean_params):
             """Sample parameters of the mean function using: 
 
             p(psi | f, theta) \propto p(f | psi, theta)p(psi)
 
             """
+            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(psi_):
                 log_pdf = 0
@@ -293,19 +259,20 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(key, logdensity_fn_, psi, stepsize=0.1)
+            sub_state, _ = mcmc_step(subkey, logdensity_fn_, mean_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
 
             mean = self.mean_fn.mean(params=sub_state, x=self.X).flatten()
         #
 
-        if len(theta):
+        if len(cov_params):
             """Sample parameters of the kernel function using: 
 
             p(theta | f, psi) \propto p(f | psi, theta)p(theta)
 
             """
+            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(theta_):
                 log_pdf = 0
@@ -316,17 +283,18 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(key, logdensity_fn_, theta, stepsize=0.1)
+            sub_state, _ = mcmc_step(subkey, logdensity_fn_, cov_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
 
-        if len(phi):
+        if len(likelihood_params):
             """Sample parameters of the likelihood using: 
 
             p(\phi | y, f) \propto p(y | f, phi)p(phi)
 
             """
+            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(phi_):
                 log_pdf = 0
@@ -336,7 +304,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(key, logdensity_fn_, phi, stepsize=0.1)
+            sub_state, _ = mcmc_step(subkey, logdensity_fn_, likelihood_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #

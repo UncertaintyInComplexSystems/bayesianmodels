@@ -8,6 +8,8 @@ from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
+from blackjax import elliptical_slice, rmh
+
 __all__ = ['inference_loop', 'smc_inference_loop']
 
 
@@ -79,5 +81,46 @@ def inference_loop(rng_key: PRNGKey, kernel: Callable, initial_state, num_sample
     _, states = jax.lax.scan(one_step, initial_state, keys)
 
     return states
+
+#
+def update_correlated_gaussian(key, state, f_current, loglikelihood_fn_, mean, cov):
+    key, subkey = jrnd.split(key)
+    elliptical_slice_sampler = elliptical_slice(loglikelihood_fn_,
+                                    mean=mean,
+                                    cov=cov)
+
+    ess_state = elliptical_slice_sampler.init(f_current)    
+    ess_state, info_f = elliptical_slice_sampler.step(subkey, ess_state)
+    return ess_state.position
+
+#
+def update_metropolis(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
+    """The MCMC step for sampling hyperparameters.
+
+    This updates the hyperparameters of the mean, covariance function
+    and likelihood, if any. Currently, this uses a random-walk
+    Metropolis step function, but other Blackjax options are available.
+
+    Args:
+        key:
+            The jax.random.PRNGKey
+        logdensity: Callable
+            Function that returns a logdensity for a given set of variables
+        variables: Dict
+            The set of variables to sample and their current values
+        stepsize: float
+            The stepsize of the random walk
+    Returns:
+        RMHState, RMHInfo
+
+    """
+    m = 0
+    for varval in variables.values():
+        m += varval.shape[0] if varval.shape else 1
+
+    kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+    substate = kernel.init(variables)
+    substate, info_ = kernel.step(subkey, substate)
+    return substate.position, info_
 
 #
