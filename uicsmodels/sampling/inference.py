@@ -84,7 +84,7 @@ def inference_loop(rng_key: PRNGKey, kernel: Callable, initial_state, num_sample
     return states
 
 #
-def update_correlated_gaussian(key, state, f_current, loglikelihood_fn_, mean, cov):
+def update_correlated_gaussian(key, f_current, loglikelihood_fn_, mean, cov):
     elliptical_slice_sampler = elliptical_slice(loglikelihood_fn_,
                                     mean=mean,
                                     cov=cov)

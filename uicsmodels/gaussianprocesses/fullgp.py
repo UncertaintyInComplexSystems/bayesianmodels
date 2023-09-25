@@ -219,6 +219,47 @@ class FullLatentGPModel(FullGPModel):
             GibbsState
 
         """
+
+        def mcmc_step(key, logdensity: Callable, variables: Dict, stepsize: Float = 0.01):
+            """The MCMC step for sampling hyperparameters.
+
+            This updates the hyperparameters of the mean, covariance function
+            and likelihood, if any. Currently, this uses a random-walk
+            Metropolis step function, but other Blackjax options are available.
+
+            Args:
+                key:
+                    The jax.random.PRNGKey
+                logdensity: Callable
+                    Function that returns a logdensity for a given set of variables
+                variables: Dict
+                    The set of variables to sample and their current values
+                stepsize: float
+                    The stepsize of the random walk
+            Returns:
+                RMHState, RMHInfo
+
+            """
+            key, _ = jrnd.split(key)
+            m = 0
+            for varval in variables.values():
+                m += varval.shape[0] if varval.shape else 1
+
+            kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+            substate = kernel.init(variables)
+            substate, info_ = kernel.step(key, substate)
+            return substate.position, info_
+
+        #
+        def get_parameters_for(component):
+            """Extract parameter sampled values per model component for current
+            position.
+
+            """
+            return {param: position[param] for param in
+                    self.param_priors[component]} if component in self.param_priors else {}
+
+        #
         
         position = state.position.copy()
 
@@ -227,83 +268,86 @@ class FullLatentGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        likelihood_params = self.__get_component_parameters(position, 'likelihood')
-        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
+        phi = get_parameters_for('likelihood')
+        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=phi, f=f_, y=self.y))
 
-        mean_params = self.__get_component_parameters(position, 'mean')
-        mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
+        psi = get_parameters_for('mean')
+        mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
 
-        cov_params = self.__get_component_parameters(position, 'kernel')
-        cov = self.kernel.cross_covariance(params=cov_params,
-                                            x=self.X, y=self.X) + jitter * jnp.eye(self.n)
-        
-        key, subkey = jrnd.split(key)
-        position['f'] = update_correlated_gaussian(subkey, state, position['f'], 
-                                                   loglikelihood_fn_, mean, cov)
+        theta = get_parameters_for('kernel')
+        cov = self.kernel.cross_covariance(params=theta,
+                                           x=self.X, y=self.X) + jitter * jnp.eye(self.n)
 
-        if len(mean_params):
+        latent_sampler = elliptical_slice(loglikelihood_fn_,
+                                          mean=mean,
+                                          cov=cov)
+        f = position['f']
+        state_f = latent_sampler.init(f)
+        key, _ = jrnd.split(key)
+        state_f, info_f = latent_sampler.step(key, state_f)
+        f = state_f.position
+        position['f'] = state_f.position
+
+        if len(psi):
             """Sample parameters of the mean function using: 
 
             p(psi | f, theta) \propto p(f | psi, theta)p(psi)
 
             """
-            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(psi_):
                 log_pdf = 0
                 for param, val in psi_.items():
                     log_pdf += jnp.sum(self.param_priors['mean'][param].log_prob(val))
                 mean = self.mean_fn.mean(params=psi_, x=self.X).flatten()
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
+                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(f)
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=0.1)
+            sub_state, _ = mcmc_step(key, logdensity_fn_, psi, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
 
             mean = self.mean_fn.mean(params=sub_state, x=self.X).flatten()
         #
 
-        if len(cov_params):
+        if len(theta):
             """Sample parameters of the kernel function using: 
 
             p(theta | f, psi) \propto p(f | psi, theta)p(theta)
 
             """
-            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(theta_):
                 log_pdf = 0
                 for param, val in theta_.items():
                     log_pdf += jnp.sum(self.param_priors['kernel'][param].log_prob(val))
                 cov_ = self.kernel.cross_covariance(params=theta_, x=self.X, y=self.X) + jitter * jnp.eye(self.n)
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov_).log_prob(position['f'])
+                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov_).log_prob(f)
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, cov_params, stepsize=0.1)
+            sub_state, _ = mcmc_step(key, logdensity_fn_, theta, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
 
-        if len(likelihood_params):
+        if len(phi):
             """Sample parameters of the likelihood using: 
 
             p(\phi | y, f) \propto p(y | f, phi)p(phi)
 
             """
-            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(phi_):
                 log_pdf = 0
                 for param, val in phi_.items():
                     log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
+                log_pdf += jnp.sum(self.likelihood.log_prob(params=phi_, f=f, y=self.y))
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, likelihood_params, stepsize=0.1)
+            sub_state, _ = mcmc_step(key, logdensity_fn_, phi, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
