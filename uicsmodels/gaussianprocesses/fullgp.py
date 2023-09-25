@@ -299,7 +299,7 @@ class FullLatentGPModel(FullGPModel):
                 log_pdf = 0
                 for param, val in phi_.items():
                     log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
+                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
                 return log_pdf
 
             #
