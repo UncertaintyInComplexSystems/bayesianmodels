@@ -14,7 +14,7 @@ import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
-#from blackjax import elliptical_slice, rmh
+from blackjax import elliptical_slice, rmh
 
 
 jitter = 1e-6
@@ -304,7 +304,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(key, logdensity_fn_, psi, stepsize=0.1)
+            sub_state, _ = update_metropolis(key, logdensity_fn_, psi, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
 
@@ -327,7 +327,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(key, logdensity_fn_, theta, stepsize=0.1)
+            sub_state, _ = update_metropolis(key, logdensity_fn_, theta, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -343,11 +343,11 @@ class FullLatentGPModel(FullGPModel):
                 log_pdf = 0
                 for param, val in phi_.items():
                     log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += jnp.sum(self.likelihood.log_prob(params=phi_, f=f, y=self.y))
+                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=f, y=self.y))
                 return log_pdf
 
             #
-            sub_state, _ = mcmc_step(key, logdensity_fn_, phi, stepsize=0.1)
+            sub_state, _ = update_metropolis(key, logdensity_fn_, phi, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
