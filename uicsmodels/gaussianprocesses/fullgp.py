@@ -131,7 +131,7 @@ class FullLatentGPModel(FullGPModel):
         # - add defaults/fixed values for parameters without prior
 
     #
-    def __get_component_parameters(position, component):
+    def __get_component_parameters(self, position, component):
         """Extract parameter sampled values per model component for current
         position.
 
