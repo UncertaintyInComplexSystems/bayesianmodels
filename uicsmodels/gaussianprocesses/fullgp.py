@@ -239,7 +239,8 @@ class FullLatentGPModel(FullGPModel):
         cov = self.kernel.cross_covariance(params=cov_params,
                                             x=self.X, y=self.X) + jitter * jnp.eye(self.n)
         
-        position['f'] = update_correlated_gaussian(key, state, position['f'], 
+        key, subkey = jrnd.split(key)
+        position['f'] = update_correlated_gaussian(subkey, state, position['f'], 
                                                    loglikelihood_fn_, mean, cov)
 
         if len(mean_params):
