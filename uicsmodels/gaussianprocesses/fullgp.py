@@ -247,8 +247,17 @@ class FullLatentGPModel(FullGPModel):
         #f = state_f.position
         #position['f'] = state_f.position
         
+        key, subkey = jrnd.split(key)
         position['f'] = update_correlated_gaussian(key, position['f'], loglikelihood_fn_, mean, cov)
         
+        #elliptical_slice_sampler = elliptical_slice(loglikelihood_fn_,
+        #                            mean=mean,
+        #                            cov=cov)
+
+        #ess_state = elliptical_slice_sampler.init(f_current)    
+        #ess_state, info_f = elliptical_slice_sampler.step(key, ess_state)
+        #return ess_state.position
+            
 
         if len(psi):
             """Sample parameters of the mean function using: 
@@ -256,6 +265,7 @@ class FullLatentGPModel(FullGPModel):
             p(psi | f, theta) \propto p(f | psi, theta)p(psi)
 
             """
+            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(psi_):
                 log_pdf = 0
@@ -266,7 +276,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(key, logdensity_fn_, psi, stepsize=0.1)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, psi, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
 
@@ -279,6 +289,7 @@ class FullLatentGPModel(FullGPModel):
             p(theta | f, psi) \propto p(f | psi, theta)p(theta)
 
             """
+            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(theta_):
                 log_pdf = 0
@@ -289,7 +300,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(key, logdensity_fn_, theta, stepsize=0.1)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, theta, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -300,6 +311,7 @@ class FullLatentGPModel(FullGPModel):
             p(\phi | y, f) \propto p(y | f, phi)p(phi)
 
             """
+            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(phi_):
                 log_pdf = 0
@@ -309,7 +321,7 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(key, logdensity_fn_, phi, stepsize=0.1)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, phi, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
