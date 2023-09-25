@@ -139,7 +139,7 @@ class FullLatentGPModel(FullGPModel):
         return {param: position[param] for param in
                 self.param_priors[component]} if component in self.param_priors else {}
 
-    #    
+    #   
     def init_fn(self, key, num_particles=1):
         """Initialization of the Gibbs state.
 
@@ -202,7 +202,7 @@ class FullLatentGPModel(FullGPModel):
 
         #
 
-    def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
+    def gibbs_fn(self, key, state, loglik_fn__, temperature=1.0, **mcmc_parameters):
         """The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
@@ -219,7 +219,6 @@ class FullLatentGPModel(FullGPModel):
             GibbsState
 
         """
-        
         position = state.position.copy()
 
         """Sample the latent GP using:
@@ -227,45 +226,29 @@ class FullLatentGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        phi = self.__get_component_parameters(position, 'likelihood')
-        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=phi, f=f_, y=self.y))
+        likelihood_params = self.__get_component_parameters(position, 'likelihood')
+        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
-        psi = self.__get_component_parameters(position, 'mean')
-        mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
+        mean_params = self.__get_component_parameters(position, 'mean')
+        mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
 
-        theta = self.__get_component_parameters(position, 'kernel')
-        cov = self.kernel.cross_covariance(params=theta,
+        cov_params = self.__get_component_parameters(position, 'kernel')
+        cov = self.kernel.cross_covariance(params=cov_params,
                                            x=self.X, y=self.X) + jitter * jnp.eye(self.n)
 
         latent_sampler = elliptical_slice(loglikelihood_fn_,
                                           mean=mean,
                                           cov=cov)
-        #f = position['f']
-        #state_f = latent_sampler.init(f)
-        #key, _ = jrnd.split(key)
-        #state_f, info_f = latent_sampler.step(key, state_f)
-        #f = state_f.position
-        #position['f'] = state_f.position
-        
+
         key, subkey = jrnd.split(key)
-        position['f'] = update_correlated_gaussian(key, position['f'], loglikelihood_fn_, mean, cov)
-        
-        #elliptical_slice_sampler = elliptical_slice(loglikelihood_fn_,
-        #                            mean=mean,
-        #                            cov=cov)
+        position['f'] = update_correlated_gaussian(subkey, position['f'], loglikelihood_fn_, mean, cov)
 
-        #ess_state = elliptical_slice_sampler.init(f_current)    
-        #ess_state, info_f = elliptical_slice_sampler.step(key, ess_state)
-        #return ess_state.position
-            
-
-        if len(psi):
+        if len(mean_params):
             """Sample parameters of the mean function using: 
 
             p(psi | f, theta) \propto p(f | psi, theta)p(psi)
 
             """
-            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(psi_):
                 log_pdf = 0
@@ -276,20 +259,20 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, psi, stepsize=0.1)
+            key, subkey = jrnd.split(key)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
 
             mean = self.mean_fn.mean(params=sub_state, x=self.X).flatten()
         #
 
-        if len(theta):
+        if len(cov_params):
             """Sample parameters of the kernel function using: 
 
             p(theta | f, psi) \propto p(f | psi, theta)p(theta)
 
             """
-            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(theta_):
                 log_pdf = 0
@@ -300,18 +283,18 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, theta, stepsize=0.1)
+            key, subkey = jrnd.split(key)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, cov_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
 
-        if len(phi):
+        if len(likelihood_params):
             """Sample parameters of the likelihood using: 
 
             p(\phi | y, f) \propto p(y | f, phi)p(phi)
 
             """
-            key, subkey = jrnd.split(key)
 
             def logdensity_fn_(phi_):
                 log_pdf = 0
@@ -321,7 +304,8 @@ class FullLatentGPModel(FullGPModel):
                 return log_pdf
 
             #
-            sub_state, _ = update_metropolis(subkey, logdensity_fn_, phi, stepsize=0.1)
+            key, subkey = jrnd.split(key)
+            sub_state, _ = update_metropolis(subkey, logdensity_fn_, likelihood_params, stepsize=0.1)
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -476,16 +460,12 @@ class FullLatentGPModel(FullGPModel):
             return f_samples
 
         #
-        if hasattr(self, 'particles'):
-            samples = self.particles.particles
-        elif hasattr(self, 'states'):
-            samples = self.states.position
-                
-        num_samples = samples['f'].shape[0]
-        key_samples = jrnd.split(key, num_samples)
+
+        num_particles = self.particles.particles['f'].shape[0]
+        key_samples = jrnd.split(key, num_particles)
 
         f_pred = jax.vmap(sample_predictive_f,
-                          in_axes=(0, None))(key_samples, x_pred, **samples)
+                          in_axes=(0, None))(key_samples, x_pred, **self.particles.particles)
         return f_pred
 
     #
