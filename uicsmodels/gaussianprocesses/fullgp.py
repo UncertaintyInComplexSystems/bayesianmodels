@@ -530,7 +530,7 @@ class FullMarginalGPModel(FullGPModel):
         logprior_fn_ = self.logprior_fn()
 
         logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-        new_position, info_ = update_metropolis(key, logdensity, position)
+        new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.1))
 
         return GibbsState(
             position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
