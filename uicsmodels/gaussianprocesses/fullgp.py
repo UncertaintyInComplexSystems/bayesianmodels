@@ -372,7 +372,7 @@ class FullLatentGPModel(FullGPModel):
         return logprior_fn_
 
     #
-    def predict_f(self, key: PRNGKey, x_pred: ArrayTree, num_subsample=-1):
+    def predict_f(model, key: PRNGKey, x_pred: ArrayTree, num_subsample=-1):
         """Predict the latent f on unseen pointsand
 
         This function takes the approximated posterior (either by MCMC or SMC)
@@ -395,7 +395,7 @@ class FullLatentGPModel(FullGPModel):
         """
 
         @jax.jit
-        def sample_predictive_f(key, x_pred: ArrayTree, **state_variables):
+        def sample_predictive_f(key, x_pred: ArrayTree, **samples):
             """Sample latent f for new points x_pred given one posterior sample.
 
             See Rasmussen & Williams. We are sampling from the posterior predictive for
@@ -427,33 +427,31 @@ class FullLatentGPModel(FullGPModel):
                 position.
 
                 """
-                return {param: state_variables[param] for param in
-                        self.param_priors[component]} if component in self.param_priors else {}
+                return {param: samples[param] for param in
+                        model.param_priors[component]} if component in model.param_priors else {}
 
             #
 
-            f = state_variables['f']
-
-            # to implement!
+            f = samples['f']
             psi = get_parameters_for('mean')
-            mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
+            mean = model.mean_fn.mean(params=psi, x=x_pred).flatten()
             theta = get_parameters_for('kernel')
 
-            kXX = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
-            kxX = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
-            kxx = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
-            for k in [kXX, kxX, kxx]:
-                k += jitter * jnp.eye(*k.shape)
+            Kxx = model.kernel.cross_covariance(params=theta, x=model.X, y=model.X)
+            Kzx = model.kernel.cross_covariance(params=theta, x=x_pred, y=model.X)
+            Kzz = model.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
 
-            L = jnp.linalg.cholesky(kXX + jitter * jnp.eye(self.n))
+            Kxx += jitter * jnp.eye(*Kxx.shape)
+            Kzx += jitter * jnp.eye(*Kzx.shape)
+            Kzz += jitter * jnp.eye(*Kzz.shape)
+
+            L = jnp.linalg.cholesky(Kxx)
             alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, f))
-            v = jnp.linalg.solve(L, kxX)
-            predictive_mean = jnp.dot(kxX.T, alpha)
-            predictive_var = kxx - jnp.dot(v.T, v)
+            v = jnp.linalg.solve(L, Kzx.T)
+            predictive_mean = mean + jnp.dot(Kzx, alpha)
+            predictive_var = Kzz - jnp.dot(v.T, v)
 
-            # if self.X.shape[0] < 20:
-            # heuristic for numerical stability
-            predictive_var += jitter * jnp.eye(*kxx.shape)
+            predictive_var += jitter * jnp.eye(*Kzz.shape)
 
             C = jnp.linalg.cholesky(predictive_var)
             z = jrnd.normal(key, shape=(len(x_pred),))
@@ -463,11 +461,12 @@ class FullLatentGPModel(FullGPModel):
 
         #
 
-        num_particles = self.particles.particles['f'].shape[0]
+        num_particles = model.particles.particles['f'].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
         f_pred = jax.vmap(sample_predictive_f,
-                          in_axes=(0, None))(key_samples, x_pred, **self.particles.particles)
+                            in_axes=(0, None))(key_samples, x_pred, 
+                                            **model.particles.particles)
         return f_pred
 
     #
@@ -658,18 +657,17 @@ class FullMarginalGPModel(FullGPModel):
             theta = get_parameters_for('kernel')
             sigma = get_parameters_for('likelihood')['obs_noise']
 
-            kXX = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
-            kXX += sigma ** 2 * jnp.eye(*kXX.shape)  # add observation noise
-            kxX = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
-            kxx = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
-            for k in [kXX, kxX, kxx]:
-                k += jitter * jnp.eye(*k.shape)
+            Kxx = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
+            K = Kxx + sigma ** 2 * jnp.eye(*Kxx.shape)  # add observation noise
+            Kzx = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
+            Kzz = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
+            Kzz += jitter * jnp.eye(*Kzz.shape)
 
-            L = jnp.linalg.cholesky(kXX + jitter * jnp.eye(self.n))
+            L = jnp.linalg.cholesky(K)
             alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))
-            v = jnp.linalg.solve(L, kxX)
-            predictive_mean = jnp.dot(kxX.T, alpha)
-            predictive_var = kxx - jnp.dot(v.T, v) + jitter * jnp.eye(*kxx.shape)
+            v = jnp.linalg.solve(L, Kzx.T)
+            predictive_mean = jnp.dot(Kzx, alpha)
+            predictive_var = Kzz - jnp.dot(v.T, v) + jitter * jnp.eye(*Kzz.shape)
 
             C = jnp.linalg.cholesky(predictive_var)
             z = jrnd.normal(key, shape=(len(x_pred),))
