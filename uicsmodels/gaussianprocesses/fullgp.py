@@ -660,7 +660,6 @@ class FullMarginalGPModel(FullGPModel):
             Kxx = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
             Kzx = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
             Kzz = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
-            Kzz += jitter * jnp.eye(*Kzz.shape)
 
             L = jnp.linalg.cholesky(Kxx + sigma ** 2 * jnp.eye(*Kxx.shape))
             alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))
