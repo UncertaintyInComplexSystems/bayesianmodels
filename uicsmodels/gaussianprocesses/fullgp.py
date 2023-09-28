@@ -658,15 +658,14 @@ class FullMarginalGPModel(FullGPModel):
             sigma = get_parameters_for('likelihood')['obs_noise']
 
             Kxx = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
-            K = Kxx + sigma ** 2 * jnp.eye(*Kxx.shape)  # add observation noise
             Kzx = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
             Kzz = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
             Kzz += jitter * jnp.eye(*Kzz.shape)
 
-            L = jnp.linalg.cholesky(K)
+            L = jnp.linalg.cholesky(K + sigma ** 2 * jnp.eye(*Kxx.shape))
             alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))
-            v = jnp.linalg.solve(L, Kzx.T)
-            predictive_mean = jnp.dot(Kzx, alpha)
+            v = jnp.linalg.solve(L, Kzx)
+            predictive_mean = jnp.dot(Kzx.T, alpha)
             predictive_var = Kzz - jnp.dot(v.T, v) + jitter * jnp.eye(*Kzz.shape)
 
             C = jnp.linalg.cholesky(predictive_var)
