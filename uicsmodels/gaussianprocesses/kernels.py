@@ -6,6 +6,30 @@ from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
 from jaxtyping import Array, Float
 from jax.nn import softmax
 
+class Brownian(jk.base.AbstractKernel):
+
+    def __init__(self) -> None:
+        pass
+
+    #
+    def __call__(self, params: Dict, x: Float[Array, "1 D"], y: Float[Array, "1 D"]) -> Float[Array, "1"]:
+        return self.cross_covariance(params, x, y)
+
+    #
+    def cross_covariance(self, params: Dict, x, y):
+        n_x = x.shape[0]
+        n_y = y.shape[0]
+        x_mat = jnp.tile(jnp.squeeze(x), (n_y, 1))
+        y_mat = jnp.tile(jnp.squeeze(y), (n_x, 1)).T
+        return params['variance'] * jnp.minimum(x_mat, y_mat)
+
+    #
+    def init_params(self, key: Array) -> dict:
+        super().init_params(key)
+
+    #
+#
+
 class SpectralMixture(jk.base.AbstractKernel):
 
     def __init__(self) -> None:
