@@ -236,10 +236,6 @@ class FullLatentGPModel(FullGPModel):
         cov = self.kernel.cross_covariance(params=cov_params,
                                            x=self.X, y=self.X) + jitter * jnp.eye(self.n)
 
-        latent_sampler = elliptical_slice(loglikelihood_fn_,
-                                          mean=mean,
-                                          cov=cov)
-
         key, subkey = jrnd.split(key)
         position['f'], f_info = update_correlated_gaussian(subkey, position['f'], loglikelihood_fn_, mean, cov)
 
