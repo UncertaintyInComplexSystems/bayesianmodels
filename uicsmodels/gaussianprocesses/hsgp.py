@@ -3,7 +3,7 @@ from jaxtyping import Float, Array
 from jax.random import PRNGKey
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
-from uicsmodels.bayesianmodels import GibbsState BayesianModel
+from uicsmodels.bayesianmodels import GibbsState, BayesianModel
 from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params
 from functools import partial
 
