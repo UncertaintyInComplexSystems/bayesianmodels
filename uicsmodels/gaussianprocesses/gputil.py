@@ -7,6 +7,7 @@ import jaxkern as jk
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 
+jitter = 1e-6
 
 def sample_predictive(key: PRNGKey,
                       mean_params: Dict,
@@ -41,8 +42,7 @@ def sample_predictive(key: PRNGKey,
     Returns:
         A single posterior predictive sample f*
 
-    """
-    jitter = 1e-6    
+    """    
 
     if obs_noise is not None:
         if jnp.isscalar(obs_noise):
