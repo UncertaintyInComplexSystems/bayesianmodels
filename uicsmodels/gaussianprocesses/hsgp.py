@@ -50,7 +50,7 @@ class FullLatentHSGPModel(BayesianModel):
         initial_position = dict()
 
         # sample from all priors
-        for component, comp_priors in hsgp.param_priors.items():
+        for component, comp_priors in self.param_priors.items():
             for param, param_dist in comp_priors.items():
                 key, subkey = jrnd.split(key)
                 param_name = f'{component}.{param}'
