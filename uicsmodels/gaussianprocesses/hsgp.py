@@ -1,5 +1,7 @@
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 from jaxtyping import Float, Array
+import jax.random as jrnd
+import jax.numpy as jnp
 from jax.random import PRNGKey
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
