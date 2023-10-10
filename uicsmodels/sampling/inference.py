@@ -11,7 +11,7 @@ ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 from blackjax import elliptical_slice, rmh
 
-__all__ = ['inference_loop', 'smc_inference_loop', 'update_correlated_gaussian', 'update_gaussian_process_cov_params']
+__all__ = ['inference_loop', 'smc_inference_loop', 'update_gaussian_process', 'update_gaussian_process_cov_params']
 
 
 def smc_inference_loop(rng_key: PRNGKey, smc_kernel: Callable, initial_state):
