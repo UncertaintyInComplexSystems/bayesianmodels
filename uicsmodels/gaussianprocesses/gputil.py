@@ -3,6 +3,7 @@ from jaxtyping import Float, Array
 from jax.random import PRNGKey
 import jax.numpy as jnp
 import jax.random as jrnd
+import jaxkern as jk
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 
