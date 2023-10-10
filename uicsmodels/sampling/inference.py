@@ -125,37 +125,3 @@ def update_metropolis(key, logdensity: Callable, variables: Dict, stepsize: Floa
     return rmh_state.position, rmh_info
 
 #
-def update_gaussian_process(key: PRNGKey, f_current: Array, loglikelihood_fn: Callable, X: Array,
-                            mean_fn: Callable = Zero(),
-                            cov_fn: Callable = jk.RBF(),
-                            mean_params: Dict = None,
-                            cov_params: Dict = None):
-    n = X.shape[0]
-    mean = mean_fn.mean(params=mean_params, x=X)
-    cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
-    return update_correlated_gaussian(key, f_current, loglikelihood_fn, mean, cov)
-
-#
-def update_gaussian_process_cov_params(key: PRNGKey, X: Array,
-                                       f: Array,
-                                       mean_fn: Callable = Zero(),
-                                       cov_fn: Callable = jk.RBF(),
-                                       mean_params: Dict = None,
-                                       cov_params: Dict = None,
-                                       hyperpriors: Dict = None):
-
-
-    n = X.shape[0]
-    mu = mean_fn.mean(params=mean_params, x=X)
-    def logdensity_fn_(cov_params_):
-        log_pdf = 0
-        for param, val in cov_params_.items():
-            log_pdf += jnp.sum(hyperpriors[param].log_prob(val))
-        cov_ = cov_fn.cross_covariance(params=cov_params_, x=X, y=X) + jitter * jnp.eye(n)
-        log_pdf += dx.MultivariateNormalFullCovariance(mu, cov_).log_prob(f)
-        return log_pdf
-
-    #
-    return update_metropolis(key, logdensity_fn_, cov_params, stepsize=0.1)
-
-#
