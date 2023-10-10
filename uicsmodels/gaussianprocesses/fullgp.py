@@ -80,19 +80,7 @@ class FullGPModel(BayesianModel):
         raise NotImplementedError
 
     #
-    def smc_init_fn(self, position: ArrayTree, kwargs):
-        """Simply wrap the position dictionary in a GibbsState object. 
-
-        Args:
-            position: dict
-                Current assignment of the state values
-            kwargs: not used in our Gibbs kernel
-        Returns:
-            A Gibbs state object.
-        """
-        return GibbsState(position)
-
-    #
+    
 
 #
         

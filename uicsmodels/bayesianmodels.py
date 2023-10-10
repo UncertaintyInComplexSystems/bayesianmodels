@@ -25,10 +25,23 @@ class BayesianModel(ABC):
     def init_fn(self, key: PRNGKey):
         pass
 
-    #
+    #    
     @abstractmethod
     def gibbs_fn(self, key: PRNGKey, state: GibbsState, **kwargs):
         pass
+
+    #
+    def smc_init_fn(self, position: ArrayTree, kwargs):
+        """Simply wrap the position dictionary in a GibbsState object. 
+
+        Args:
+            position: dict
+                Current assignment of the state values
+            kwargs: not used in our Gibbs kernel
+        Returns:
+            A Gibbs state object.
+        """
+        return GibbsState(position)
 
     #
     def loglikelihood_fn(self):
