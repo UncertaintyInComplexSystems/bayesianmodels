@@ -56,11 +56,11 @@ class FullGPModel(BayesianModel):
         initial_position = dict()
         for component, comp_priors in self.param_priors.items():
             for param, param_dist in comp_priors.items():
-                key, _ = jrnd.split(key)
+                key, subkey = jrnd.split(key)
                 if num_particles > 1:
-                    initial_position[param] = param_dist.sample(seed=key, sample_shape=(num_particles,))
+                    initial_position[param] = param_dist.sample(seed=subkey, sample_shape=(num_particles,))
                 else:
-                    initial_position[param] = param_dist.sample(seed=key)
+                    initial_position[param] = param_dist.sample(seed=subkey)
         return GibbsState(position=initial_position)
 
     # 
@@ -167,7 +167,6 @@ class FullLatentGPModel(FullGPModel):
                 mean_params = {param: initial_position_[param] for param in self.param_priors['mean_function']}
                 mean = self.mean_fn.mean(params=mean_params, x=self.X)
             else:
-#                 mean = jnp.zeros_like(self.X)
                 mean = jnp.zeros((self.X.shape[0], ))
             if jnp.ndim(mean) == 1:
                 mean = mean[:, jnp.newaxis]
