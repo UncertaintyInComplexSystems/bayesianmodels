@@ -1,8 +1,15 @@
+from jax import Array
+from jaxtyping import Float
+from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
-from jaxtyping import Float, Array
-import jax.random as jrnd
+ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
+
+import jax
+import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
+import jax.random as jrnd
+
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.bayesianmodels import GibbsState, BayesianModel
