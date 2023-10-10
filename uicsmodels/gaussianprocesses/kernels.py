@@ -17,11 +17,12 @@ class Brownian(jk.base.AbstractKernel):
 
     #
     def cross_covariance(self, params: Dict, x, y):
+        # see https://github.com/SheffieldML/GPy/blob/devel/GPy/kern/src/brownian.py
         n_x = x.shape[0]
         n_y = y.shape[0]
         x_mat = jnp.tile(jnp.squeeze(x), (n_y, 1))
-        y_mat = jnp.tile(jnp.squeeze(y), (n_x, 1)).T
-        return params['variance'] * jnp.minimum(x_mat, y_mat)
+        y_mat = jnp.tile(jnp.squeeze(y), (n_x, 1)).T        
+        return (params['variance'] * jnp.where(jnp.sign(x_mat)==jnp.sign(y_mat), jnp.fmin(jnp.abs(x_mat), jnp.abs(y_mat)), 0)).T
 
     #
     def init_params(self, key: Array) -> dict:

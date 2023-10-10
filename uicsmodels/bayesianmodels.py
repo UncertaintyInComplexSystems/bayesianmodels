@@ -132,6 +132,15 @@ class BayesianModel(ABC):
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 
     #
+    def get_monte_carlo_samples(self):
+        if hasattr(self, 'particles'):
+            return self.particles.particles
+        elif hasattr(self, 'states'):
+            return self.states.initial_position
+        else:
+            raise NotImplementedError('Please first run inference')
+
+    #
     def plot_priors(self, axes=None):
         pass
 
