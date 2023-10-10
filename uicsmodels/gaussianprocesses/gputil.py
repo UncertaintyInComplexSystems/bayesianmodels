@@ -75,7 +75,7 @@ def sample_predictive(key: PRNGKey,
     return samples
 
 #
-def sample_prior(key: PRNGKey, mean_params: Dict = None, cov_params: Dict = None, mean_fn: Callable, cov_fn: Callable, x: Array):
+def sample_prior(key: PRNGKey, mean_params: Dict, cov_params: Dict, mean_fn: Callable, cov_fn: Callable, x: Array):
     n = x.shape[0]
     mu = mean_fn.mean(params=mean_params, x=x)
     cov = cov_fn.cross_covariance(params=cov_params,
