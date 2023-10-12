@@ -1,5 +1,6 @@
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
+from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params, update_gaussian_process_obs_params
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 
@@ -33,7 +34,7 @@ class FullGPModel(BayesianModel):
         if mean_fn is None:
             mean_fn = Zero()
         self.mean_fn = mean_fn
-        self.kernel = cov_fn
+        self.cov_fn = cov_fn
         self.param_priors = priors
         # TODO:
         # - assert whether all trainable parameters have been assigned priors
@@ -149,41 +150,28 @@ class FullLatentGPModel(FullGPModel):
         """
 
         initial_state = super().init_fn(key, num_particles)
-
-        def sample_latent(key, initial_position_):
-            if 'mean_function' in self.param_priors.keys():
-                mean_params = {param: initial_position_[param] for param in self.param_priors['mean_function']}
-                mean = self.mean_fn.mean(params=mean_params, x=self.X)
-            else:
-                mean = jnp.zeros((self.X.shape[0], ))
-            if jnp.ndim(mean) == 1:
-                mean = mean[:, jnp.newaxis]
-
-            if 'kernel' in self.param_priors.keys():
-                cov_params = {param: initial_position_[param] for param in self.param_priors['kernel']}
-                cov = self.kernel.cross_covariance(params=cov_params,
-                                                   x=self.X,
-                                                   y=self.X) + jitter * jnp.eye(self.n)
-            else:
-                cov = jnp.eye(self.n)
-
-            L = jnp.linalg.cholesky(cov)
-            z = jrnd.normal(key, shape=(self.n, 1))
-            f = jnp.asarray(mean + jnp.dot(L, z))
-            return f.flatten()
-
-        #
         initial_position = initial_state.position
 
+        mean_params = {param: initial_position[param] for param in self.param_priors.get(f'mean', {})}
+        cov_params = {param: initial_position[param] for param in self.param_priors[f'kernel']}
+
         if num_particles > 1:
-            keys = jrnd.split(key, num_particles)
-            # We vmap across the first dimension of the elements *in* the
-            # dictionary, rather than over the dictionary itself.
-            initial_position['f'] = jax.vmap(sample_latent,
-                                             in_axes=(0, {k: 0 for k in initial_position}))(keys, initial_position)
+            keys = jrnd.split(key, num_particles)                
+            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(key=key_, 
+                                                                                mean_params=mean_params_,
+                                                                                cov_params=cov_params_,
+                                                                                mean_fn=self.mean_fn,
+                                                                                cov_fn=self.cov_fn, 
+                                                                                x=self.X)
+            initial_position['f'] = jax.vmap(sample_fun,
+                                                in_axes=(0,
+                                                        {k: 0 for k in mean_params},
+                                                        {k: 0 for k in cov_params}))(keys, mean_params, cov_params)
         else:
-            key, _ = jrnd.split(key)
-            initial_position['f'] = sample_latent(key, initial_position)
+            key, subkey = jrnd.split(key)
+            initial_position['f'] = sample_prior(subkey, self.mean_fn, 
+                                                    self.cov_fn, mean_params, 
+                                                    cov_params, self.X)
 
         return GibbsState(initial_position)
 
@@ -217,37 +205,39 @@ class FullLatentGPModel(FullGPModel):
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
         mean_params = self.__get_component_parameters(position, 'mean')
-        mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
+        # mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
 
         cov_params = self.__get_component_parameters(position, 'kernel')
-        cov = self.kernel.cross_covariance(params=cov_params,
-                                           x=self.X, y=self.X) + jitter * jnp.eye(self.n)
+        # cov = self.cov_fn.cross_covariance(params=cov_params,
+        #                                    x=self.X, y=self.X) + jitter * jnp.eye(self.n)
 
         key, subkey = jrnd.split(key)
-        position['f'], f_info = update_correlated_gaussian(subkey, position['f'], loglikelihood_fn_, mean, cov)
+        position['f'], f_info = update_gaussian_process(subkey,
+                                                        position['f'],
+                                                        loglikelihood_fn_,
+                                                        self.X,
+                                                        mean_fn=self.mean_fn,
+                                                        cov_fn=self.cov_fn,
+                                                        mean_params=mean_params,
+                                                        cov_params=cov_params)
 
         if len(mean_params):
             """Sample parameters of the mean function using: 
 
             p(psi | f, theta) \propto p(f | psi, theta)p(psi)
 
-            """
-
-            def logdensity_fn_(psi_):
-                log_pdf = 0
-                for param, val in psi_.items():
-                    log_pdf += jnp.sum(self.param_priors['mean'][param].log_prob(val))
-                mean = self.mean_fn.mean(params=psi_, x=self.X).flatten()
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
-                return log_pdf
-
-            #
+            """            
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
+            sub_state, sub_info = update_gaussian_process_mean_params(subkey, self.X,
+                                       position['f'],
+                                       mean_fn=self.mean_fn,
+                                       cov_fn=self.cov_fn,
+                                       mean_params=mean_params,
+                                       cov_params=cov_params,
+                                       hyperpriors=self.param_priors['kernel'])
             for param, val in sub_state.items():
                 position[param] = val
-
-            mean = self.mean_fn.mean(params=sub_state, x=self.X).flatten()
+            
         #
 
         if len(cov_params):
@@ -256,19 +246,14 @@ class FullLatentGPModel(FullGPModel):
             p(theta | f, psi) \propto p(f | psi, theta)p(theta)
 
             """
-
-            def logdensity_fn_(theta_):
-                log_pdf = 0
-                for param, val in theta_.items():
-                    log_pdf += jnp.sum(self.param_priors['kernel'][param].log_prob(val))
-                cov_ = self.kernel.cross_covariance(params=theta_, x=self.X, y=self.X) + jitter * jnp.eye(self.n)
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov_).log_prob(position['f'])
-                return log_pdf
-
-            #
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, cov_params, 
-                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('kernel', 0.1))
+            sub_state, sub_info = update_gaussian_process_cov_params(subkey, self.X,
+                                       position['f'],
+                                       mean_fn=self.mean_fn,
+                                       cov_fn=self.cov_fn,
+                                       mean_params=mean_params,
+                                       cov_params=cov_params,
+                                       hyperpriors=self.param_priors['kernel'])
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -280,17 +265,14 @@ class FullLatentGPModel(FullGPModel):
 
             """
 
-            def logdensity_fn_(phi_):
-                log_pdf = 0
-                for param, val in phi_.items():
-                    log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
-                return log_pdf
-
-            #
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, 
-                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('likelihood', 0.1))
+            sub_state, sub_info = update_gaussian_process_obs_params(subkey, self.y,
+                                       position['f'],
+                                       temperature=temperature,
+                                       likelihood=self.likelihood,
+                                       obs_params=likelihood_params,
+                                       hyperpriors=self.param_priors['likelihood'])
+
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -345,7 +327,7 @@ class FullLatentGPModel(FullGPModel):
             theta = {param: position[param] for param in
                      self.param_priors['kernel']} if 'kernel' in self.param_priors else {}
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            cov = self.kernel.cross_covariance(params=theta,
+            cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
                                                y=self.X) + jitter * jnp.eye(self.n)
             logprob += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
@@ -420,9 +402,9 @@ class FullLatentGPModel(FullGPModel):
             mean = model.mean_fn.mean(params=psi, x=x_pred).flatten()
             theta = get_parameters_for('kernel')
 
-            Kxx = model.kernel.cross_covariance(params=theta, x=model.X, y=model.X)
-            Kzx = model.kernel.cross_covariance(params=theta, x=x_pred, y=model.X)
-            Kzz = model.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
+            Kxx = model.cov_fn.cross_covariance(params=theta, x=model.X, y=model.X)
+            Kzx = model.cov_fn.cross_covariance(params=theta, x=x_pred, y=model.X)
+            Kzz = model.cov_fn.cross_covariance(params=theta, x=x_pred, y=x_pred)
 
             Kxx += jitter * jnp.eye(*Kxx.shape)
             Kzx += jitter * jnp.eye(*Kzx.shape)
@@ -538,7 +520,7 @@ class FullMarginalGPModel(FullGPModel):
 
             sigma = state['obs_noise']
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            cov = self.kernel.cross_covariance(params=theta,
+            cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
                                                y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.n)
             logprob = dx.MultivariateNormalFullCovariance(mean, cov).log_prob(self.y)
@@ -640,9 +622,9 @@ class FullMarginalGPModel(FullGPModel):
             theta = get_parameters_for('kernel')
             sigma = get_parameters_for('likelihood')['obs_noise']
 
-            Kxx = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
-            Kzx = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
-            Kzz = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
+            Kxx = self.cov_fn.cross_covariance(params=theta, x=self.X, y=self.X)
+            Kzx = self.cov_fn.cross_covariance(params=theta, x=self.X, y=x_pred)
+            Kzz = self.cov_fn.cross_covariance(params=theta, x=x_pred, y=x_pred)
 
             L = jnp.linalg.cholesky(Kxx + sigma ** 2 * jnp.eye(*Kxx.shape))
             alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))

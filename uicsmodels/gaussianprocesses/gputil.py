@@ -7,17 +7,18 @@ import jaxkern as jk
 import distrax as dx
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
+from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 
 jitter = 1e-6
 
-def sample_predictive(key: PRNGKey,
-                      mean_params: Dict,
-                      cov_params: Dict,
-                      mean_fn: Callable,
-                      cov_fn: Callable,
-                      x: Array,
-                      z: Array,
+def sample_predictive(key: PRNGKey, 
+                      x: Array, 
+                      z: Array, 
                       target: Array,
+                      cov_fn: Callable,
+                      mean_params: Dict = None,
+                      cov_params: Dict = None,
+                      mean_fn: Callable = Zero(),
                       obs_noise = None):
     """Sample latent f for new points x_pred given one posterior sample.
 
@@ -78,7 +79,7 @@ def sample_predictive(key: PRNGKey,
     return samples
 
 #
-def sample_prior(key: PRNGKey, mean_params: Dict, cov_params: Dict, mean_fn: Callable, cov_fn: Callable, x: Array):
+def sample_prior(key: PRNGKey, x: Array, cov_params: Dict, cov_fn: Callable, mean_params: Dict = None, mean_fn: Callable = Zero()):
     n = x.shape[0]
     mu = mean_fn.mean(params=mean_params, x=x)
     cov = cov_fn.cross_covariance(params=cov_params,
@@ -124,3 +125,43 @@ def update_gaussian_process_cov_params(key: PRNGKey, X: Array,
     return update_metropolis(key, logdensity_fn_, cov_params, stepsize=0.1)
 
 #
+def update_gaussian_process_mean_params(key: PRNGKey, X: Array,
+                                       f: Array,
+                                       mean_fn: Callable = Zero(),
+                                       cov_fn: Callable = jk.RBF(),
+                                       mean_params: Dict = None,
+                                       cov_params: Dict = None,
+                                       hyperpriors: Dict = None):
+
+
+    n = X.shape[0]
+    cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
+    def logdensity_fn_(mean_params_):
+        log_pdf = 0
+        for param, val in mean_params_.items():
+            log_pdf += jnp.sum(hyperpriors[param].log_prob(val))
+        mean_ = mean_fn.mean(params=mean_params_, x=X)
+        log_pdf += dx.MultivariateNormalFullCovariance(mean_, cov).log_prob(f)
+        return log_pdf
+
+    #
+    return update_metropolis(key, logdensity_fn_, mean_params, stepsize=0.1)
+
+#
+def update_gaussian_process_obs_params(key: PRNGKey, y: Array,
+                                       f: Array,
+                                       temperature: Float = 1.0,
+                                       likelihood: AbstractLikelihood = Gaussian(),
+                                       obs_params: Dict = None,
+                                       hyperpriors: Dict = None):
+    def logdensity_fn_(obs_params_):
+        log_pdf = 0
+        for param, val in obs_params_.items():
+            log_pdf += jnp.sum(hyperpriors[param].log_prob(val))
+        log_pdf += temperature*jnp.sum(likelihood.log_prob(params=obs_params_, f=f, y=y))
+        return log_pdf
+
+    #
+    key, subkey = jrnd.split(key)
+    return update_metropolis(subkey, logdensity_fn_, obs_params, stepsize=0.1)
+ 
