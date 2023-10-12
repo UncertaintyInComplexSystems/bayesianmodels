@@ -14,8 +14,6 @@ from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussia
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.bayesianmodels import GibbsState, BayesianModel
 from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params
-from functools import partial
-
 
 class FullLatentHSGPModel(BayesianModel):
 
@@ -74,9 +72,13 @@ class FullLatentHSGPModel(BayesianModel):
             cov_params = {param: initial_position[f'kernel_{name}.{param}'] for param in self.param_priors[f'kernel_{name}']}
 
             if num_particles > 1:
-                keys = jrnd.split(key, num_particles)
-                # We can't vmap over function handles and use a partial - note the argument order in sample_latent!
-                sample_fun = partial(sample_prior, mean_fn=self.mean_fns[name], cov_fn=self.cov_fns[name], x=self.X)
+                keys = jrnd.split(key, num_particles)                
+                sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(key=key_, 
+                                                                                  mean_params=mean_params_,
+                                                                                  cov_params=cov_params_,
+                                                                                  mean_fn=self.mean_fns[name],
+                                                                                  cov_fn=self.cov_fns[name], 
+                                                                                  x=self.X)
                 initial_position[name] = jax.vmap(sample_fun,
                                                   in_axes=(0,
                                                            {k: 0 for k in mean_params},
@@ -205,8 +207,8 @@ class FullLatentHSGPModel(BayesianModel):
         cov_params = {param: self.get_monte_carlo_samples()[f'kernel_{latent}.{param}'] for param in self.param_priors[f'kernel_{latent}']}
 
         sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
-                                                                            mean_params, 
-                                                                            cov_params, 
+                                                                            mean_params=mean_params, 
+                                                                            cov_params=cov_params, 
                                                                             mean_fn=self.mean_fns[latent], # TODO: how to get this from 'latent'?
                                                                             cov_fn=self.cov_fns[latent], 
                                                                             x=self.X, 
