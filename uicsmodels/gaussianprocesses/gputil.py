@@ -47,14 +47,13 @@ def sample_predictive(key: PRNGKey,
     """    
 
     if obs_noise is not None:
-        if jnp.isscalar(obs_noise):
-            diagonal_noise = obs_noise * jnp.eye(nx)
+        if jnp.isscalar(obs_noise) or jnp.ndim(obs_noise) == 0:
+            diagonal_noise = obs_noise * jnp.eye(x.shape[0],)
         else:
             diagonal_noise = jnp.diagflat(obs_noise)
     else:
         diagonal_noise = 0
-
-    nx = x.shape[0]
+    
     mean = mean_fn.mean(params=mean_params, x=z)
     Kxx = cov_fn.cross_covariance(params=cov_params, x=x, y=x)
     Kzx = cov_fn.cross_covariance(params=cov_params, x=z, y=x)

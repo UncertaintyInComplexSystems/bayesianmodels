@@ -154,21 +154,15 @@ def test_fullgp(seed=42):
 
     lengthscale_ = 0.1
     output_scale_ = 5.0
-    obs_noise_ = 0.3
+    obs_noise_ = 0.8
     n = 100
     x = jnp.linspace(0, 1, n)[:, jnp.newaxis]
 
-    kernel = jk.RBF()
-    K = kernel.cross_covariance(params=dict(lengthscale=lengthscale_,
-                                            variance=output_scale_),
-                                x=x, y=x) + 1e-6*jnp.eye(n)
-
-    L = jnp.linalg.cholesky(K)
-    z = jrnd.normal(key, shape=(n,))
-
-    f_true = jnp.dot(L, z) + jnp.ones_like(z)
-    key, obs_key = jrnd.split(key)
-    y = f_true + obs_noise_*jrnd.normal(obs_key, shape=(n,))
+    key, key_f, key_obs = jrnd.split(key, 3)
+    f_true = sample_prior(key_f, x=x, cov_fn=jk.RBF(), cov_params=dict(lengthscale=lengthscale_,
+                                            variance=output_scale_))
+    
+    y = f_true + obs_noise_*jrnd.normal(key_obs, shape=(n,))
 
     ground_truth = dict(f=f_true,
                         lengthscale=lengthscale_,
@@ -257,21 +251,17 @@ def test_fullgp(seed=42):
                                 sharey=True, constrained_layout=True)
 
     for j, gp in enumerate([gp_marginal, gp_latent]):
-        key, key_pred = jrnd.split(key)
-        f_pred = gp.predict_f(key_pred, x_pred)
+        key, key_f, key_y = jrnd.split(key, 3)
+        f_pred = gp.predict_f(key_f, x_pred)  
+        y_pred = gp.predict_y(key_y, x_pred)      
 
         ax = axes[j, 0]
         for i in jnp.arange(0, num_particles, step=10):
             ax.plot(x_pred, f_pred[i, :], alpha=0.1, color='tab:blue')
 
-        ax = axes[j, 1]
-        f_mean = jnp.mean(f_pred, axis=0)
-        f_hdi_lower = jnp.percentile(f_pred, q=2.5, axis=0)
-        f_hdi_upper = jnp.percentile(f_pred, q=97.5, axis=0)
-
-        ax.plot(x_pred, f_mean, color='tab:blue', lw=2)
-        ax.fill_between(x_pred, f_hdi_lower, f_hdi_upper,
-                        alpha=0.2, color='tab:blue', lw=0)
+        ax = axes[j, 1]        
+        plot_dist(ax, x_pred, y_pred, color='tab:red')
+        plot_dist(ax, x_pred, f_pred, color='tab:red')
 
     for ax in axes.flatten():
         ax.plot(x, f_true, 'k', label=r'$f$')
@@ -285,3 +275,5 @@ def test_fullgp(seed=42):
 
     axes[0, 0].set_ylabel('Marginal GP', rotation=0, ha='right')
     axes[1, 0].set_ylabel('Latent GP', rotation=0, ha='right');
+
+    return gp_marginal, gp_latent

@@ -337,107 +337,58 @@ class FullLatentGPModel(FullGPModel):
         return logprior_fn_
 
     #
-    def predict_f(model, key: PRNGKey, x_pred: ArrayTree, num_subsample=-1):
-        """Predict the latent f on unseen pointsand
-
-        This function takes the approximated posterior (either by MCMC or SMC)
-        and predicts new latent function evaluations f^*.
-
-        Args:
-            key: PRNGKey
-            x_pred: x^*; the queried locations.
-            num_subsample: By default, we return one predictive sample for each
-            posterior sample. While accurate, this can be memory-intensive; this
-            parameter can be used to thin the MC output to every n-th sample.
-
-        Returns:
-            f_samples: An array of samples of f^* from p(f^* | x^*, x, y)
-
-
-        todo:
-        - predict using either SMC or MCMC output
-        - predict from prior if desired
-        """
-
-        @jax.jit
-        def sample_predictive_f(key, x_pred: ArrayTree, **samples):
-            """Sample latent f for new points x_pred given one posterior sample.
-
-            See Rasmussen & Williams. We are sampling from the posterior predictive for
-            the latent GP f, at this point not concerned with an observation model yet.
-
-            We have [f, f*]^T ~ N(0, KK), where KK is a block matrix:
-
-            KK = [[K(x, x), K(x, x*)], [K(x, x*)^T, K(x*, x*)]]
-
-            This results in the conditional
-
-            f* | x, x*, f ~ N(mu, cov), where
-
-            mu = K(x*, x)K(x,x)^-1 f
-            cov = K(x*, x*) - K(x*, x) K(x, x)^-1 K(x, x*)
-
-            Args:
-                key: The jrnd.PRNGKey object
-                x_pred: The prediction locations x*
-                state_variables: A sample from the posterior
-
-            Returns:
-                A single posterior predictive sample f*
-
-            """
-
-            def get_parameters_for(component):
-                """Extract parameter sampled values per model component for current
-                position.
-
-                """
-                return {param: samples[param] for param in
-                        model.param_priors[component]} if component in model.param_priors else {}
-
-            #
-
-            f = samples['f']
-            psi = get_parameters_for('mean')
-            mean = model.mean_fn.mean(params=psi, x=x_pred).flatten()
-            theta = get_parameters_for('kernel')
-
-            Kxx = model.cov_fn.cross_covariance(params=theta, x=model.X, y=model.X)
-            Kzx = model.cov_fn.cross_covariance(params=theta, x=x_pred, y=model.X)
-            Kzz = model.cov_fn.cross_covariance(params=theta, x=x_pred, y=x_pred)
-
-            Kxx += jitter * jnp.eye(*Kxx.shape)
-            Kzx += jitter * jnp.eye(*Kzx.shape)
-            Kzz += jitter * jnp.eye(*Kzz.shape)
-
-            L = jnp.linalg.cholesky(Kxx)
-            alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, f))
-            v = jnp.linalg.solve(L, Kzx.T)
-            predictive_mean = mean + jnp.dot(Kzx, alpha)
-            predictive_var = Kzz - jnp.dot(v.T, v)
-
-            predictive_var += jitter * jnp.eye(*Kzz.shape)
-
-            C = jnp.linalg.cholesky(predictive_var)
-            z = jrnd.normal(key, shape=(len(x_pred),))
-
-            f_samples = predictive_mean + jnp.dot(C, z)
-            return f_samples
-
-        #
-
-        num_particles = model.particles.particles['f'].shape[0]
+    def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples['f'].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        f_pred = jax.vmap(sample_predictive_f,
-                            in_axes=(0, None))(key_samples, x_pred, 
-                                            **model.particles.particles)
-        return f_pred
+        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
+        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
+
+        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
+                                                                            mean_params=mean_params, 
+                                                                            cov_params=cov_params, 
+                                                                            mean_fn=self.mean_fn,
+                                                                            cov_fn=self.cov_fn, 
+                                                                            x=self.X, 
+                                                                            z=x_pred, 
+                                                                            target=target)
+        keys = jrnd.split(key, num_particles)
+        target_pred = jax.vmap(jax.jit(sample_fun), 
+                        in_axes=(0, 
+                        {k: 0 for k in mean_params}, 
+                            {k: 0 for k in cov_params}, 
+                                0))(keys, 
+                                    mean_params, 
+                                    cov_params, 
+                                    samples['f'])
+
+        return target_pred
 
     #
-    def predict_y(self, key, x_pred):
-        # todo; call predict_f first, then the dx random from the appropriate likelihood
-        pass
+    def predict_y(self, key: PRNGKey, x_pred: Array):
+        """Posterior predictive distribution p(y* | f*, x*)
+
+        """
+        assert hasattr(self, 'particles'), 'No particles available'
+
+        def forward(key, params, f):
+            return self.likelihood.likelihood(params, f).sample(seed=key)
+
+        #
+        key, key_f, key_y = jrnd.split(key, 3)
+        f_pred = self.predict_f(key_f, x_pred)
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples['f'].shape[0]
+        keys_y = jrnd.split(key_y, num_particles)
+        likelihood_params = {param: samples[param] for param in self.param_priors['likelihood']}
+        y_pred = jax.vmap(jax.jit(forward), 
+                          in_axes=(0, 
+                                    {k: 0 for k in likelihood_params}, 
+                                    0))(keys_y, 
+                                    likelihood_params, 
+                                    f_pred)
+        return y_pred
 
     #
 #
@@ -468,6 +419,7 @@ class FullMarginalGPModel(FullGPModel):
                  mean_fn: Callable = None,
                  priors: Dict = None):
         super().__init__(X, y, cov_fn, mean_fn, priors)
+        self.likelihood = Gaussian()
 
     #
     def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
@@ -575,81 +527,60 @@ class FullMarginalGPModel(FullGPModel):
         - predict using either SMC or MCMC output
         - predict from prior if desired
         """
+        
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples[list(samples.keys())[0]].shape[0]
+        key_samples = jrnd.split(key, num_particles)
 
-        @jax.jit
-        def sample_predictive_f(key, x_pred: ArrayTree, **state_variables):
-            """Sample latent f for new points x_pred given one posterior sample.
+        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
+        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
 
-            See Rasmussen & Williams. We are sampling from the posterior predictive for
-            the latent GP f, at this point not concerned with an observation model yet.
+        sample_fun = lambda key, mean_params_, cov_params_, obs_noise_: sample_predictive(key, 
+                                                                            mean_params=mean_params_, 
+                                                                            cov_params=cov_params_, 
+                                                                            mean_fn=self.mean_fn,
+                                                                            cov_fn=self.cov_fn, 
+                                                                            x=self.X, 
+                                                                            z=x_pred, 
+                                                                            target=self.y,
+                                                                            obs_noise=obs_noise_)
+        keys = jrnd.split(key, num_particles)
+        target_pred = jax.vmap(jax.jit(sample_fun), 
+                        in_axes=(0, 
+                                {k: 0 for k in mean_params}, 
+                                {k: 0 for k in cov_params},
+                                0))(keys, 
+                                        mean_params, 
+                                        cov_params,
+                                        samples['obs_noise'])
 
-            We have [f, f*]^T ~ N(0, KK), where KK is a block matrix:
+        return target_pred
 
-            KK = [[K(x, x), K(x, x*)], [K(x, x*)^T, K(x*, x*)]]
+    #
+    def predict_y(self, key: PRNGKey, x_pred: Array):
+        # todo: make part of superclass
+        """Posterior predictive distribution p(y* | f*, x*)
 
-            This results in the conditional
+        """
+        assert hasattr(self, 'particles'), 'No particles available'
 
-            f* | x, x*, f ~ N(mu, cov), where
-
-            mu = K(x*, x)K(x,x)^-1 f
-            cov = K(x*, x*) - K(x*, x) K(x, x)^-1 K(x, x*)
-
-            Args:
-                key: The jrnd.PRNGKey object
-                x_pred: The prediction locations x*
-                state_variables: A sample from the posterior
-
-            Returns:
-                A single posterior predictive sample f*
-
-            """
-
-            def get_parameters_for(component):
-                """Extract parameter sampled values per model component for current
-                position.
-
-                """
-                return {param: state_variables[param] for param in
-                        self.param_priors[component]} if component in self.param_priors else {}
-
-            #
-
-            jitter = 1e-6
-
-            # to implement!
-            psi = get_parameters_for('mean')
-            mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            theta = get_parameters_for('kernel')
-            sigma = get_parameters_for('likelihood')['obs_noise']
-
-            Kxx = self.cov_fn.cross_covariance(params=theta, x=self.X, y=self.X)
-            Kzx = self.cov_fn.cross_covariance(params=theta, x=self.X, y=x_pred)
-            Kzz = self.cov_fn.cross_covariance(params=theta, x=x_pred, y=x_pred)
-
-            L = jnp.linalg.cholesky(Kxx + sigma ** 2 * jnp.eye(*Kxx.shape))
-            alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))
-            v = jnp.linalg.solve(L, Kzx)
-            predictive_mean = jnp.dot(Kzx.T, alpha)
-            predictive_var = Kzz - jnp.dot(v.T, v) + jitter * jnp.eye(*Kzz.shape)
-
-            C = jnp.linalg.cholesky(predictive_var)
-            z = jrnd.normal(key, shape=(len(x_pred),))
-
-            f_samples = predictive_mean + jnp.dot(C, z)
-            return f_samples
+        def forward(key, params, f):
+            return self.likelihood.likelihood(params, f).sample(seed=key)
 
         #
-        if hasattr(self, 'particles'):
-            samples = self.particles.particles
-        elif hasattr(self, 'states'):
-            samples = self.states.position
-                
-        num_samples = samples['obs_noise'].shape[0]
-        key_samples = jrnd.split(key, num_samples)
-
-        f_pred = jax.vmap(sample_predictive_f,
-                          in_axes=(0, None))(key_samples, x_pred, **samples)
-        return f_pred
+        key, key_f, key_y = jrnd.split(key, 3)
+        f_pred = self.predict_f(key_f, x_pred)
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples[list(samples.keys())[0]].shape[0]
+        keys_y = jrnd.split(key_y, num_particles)
+        likelihood_params = {param: samples[param] for param in self.param_priors['likelihood']}
+        y_pred = jax.vmap(jax.jit(forward), 
+                          in_axes=(0, 
+                                    {k: 0 for k in likelihood_params}, 
+                                    0))(keys_y, 
+                                    likelihood_params, 
+                                    f_pred)
+        return y_pred
 
     #
 
