@@ -16,9 +16,12 @@ from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
+from collections.abc import MutableMapping
+
 from uicsmodels.gaussianprocesses.gputil import sample_prior
 from uicsmodels.gaussianprocesses.hsgp import FullLatentHSGPModel
-from uicsmodels.gaussianprocesses.kernels import Brownian
+from uicsmodels.gaussianprocesses.kernels import Brownian, SpectralMixture
+from uicsmodels.gaussianprocesses.meanfunctions import Constant
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
 
 def plot_dist(ax, x, samples, **kwargs):
@@ -31,7 +34,87 @@ def plot_dist(ax, x, samples, **kwargs):
                     alpha=0.2, lw=0, color=color)
 
 #
+def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str ='.') -> MutableMapping:
+    items = []
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, MutableMapping):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
 
+#
+def test_smk(seed=42):
+    print('Generate data')
+
+    n = 200
+    obs_noise = 0.2
+
+    key = jrnd.PRNGKey(seed)
+    key, key_x, key_y = jrnd.split(key, 3)
+
+    x = jnp.sort(jrnd.uniform(key=key_x, minval=-3.0, maxval=3.0, shape=(n,))).reshape(-1, 1)
+    f = lambda x: 10*jnp.sin(12 * x) + 5*jnp.cos(2 * x) + 2*jnp.sin(6 * (x - 2))
+    signal = f(x)
+    y = (signal + jrnd.normal(key_y, shape=signal.shape) * obs_noise).flatten()
+
+    plt.figure(figsize=(12, 4))
+    plt.plot(jnp.linspace(-3, 3, num=300).reshape(-1, 1),
+            f(jnp.linspace(-3, 3, num=300).reshape(-1, 1)),
+            color='tab:green')
+    plt.plot(x, y, 'o', c='tab:orange')
+    plt.xlabel(r'$x$')
+    plt.ylabel(r'$y$')
+    plt.xlim([-3, 3]);
+
+    Q = 3
+
+    priors = dict(kernel=dict(beta=dx.Normal(loc=jnp.zeros((Q-1, )),
+                                            scale=jnp.ones((Q-1, ))),
+                            mu=dx.Normal(loc=jnp.zeros((Q, )),
+                                        scale=jnp.ones((Q, ))),
+                            nu=dx.Transformed(dx.Normal(loc=jnp.zeros((Q, )),
+                                                        scale=jnp.ones((Q, ))),
+                                                tfb.Exp())),
+                likelihood=dict(obs_noise=dx.Transformed(dx.Normal(loc=0.,
+                                                                    scale=1.),
+                                                        tfb.Exp())))
+
+    print('Inference')
+    key, subkey = jrnd.split(key)
+    num_particles = 1_000
+
+    gp_smk = FullMarginalGPModel(x, y, cov_fn=SpectralMixture(), priors=priors)
+    smk_particles, _, _ = gp_smk.inference(subkey, mode='gibbs-in-smc',
+                                           sampling_parameters=dict(num_particles=num_particles,
+                                                                    num_mcmc_steps=100))
+
+    plt.figure(figsize=(12, 3))
+    ax = plt.gca()
+    for q in range(Q):
+        ax.hist(smk_particles.particles['mu'][:,q], 
+                 density=True, bins=30, alpha=0.5)
+        ax.set_xlabel(r'$\mu_q$')
+
+    print('Prediction')
+
+    plt.figure(figsize=(12, 3))
+    ax = plt.gca()
+
+    x_pred = jnp.linspace(-5, 5, num=300)[:, jnp.newaxis]
+    key, key_f, key_y = jrnd.split(key, 3)
+    f_pred = gp_smk.predict_f(key_f, x_pred)  
+    y_pred = gp_smk.predict_y(key_y, x_pred)      
+
+    for i in jnp.arange(0, num_particles, step=50):
+        ax.plot(x_pred, f_pred[i, :], alpha=0.1, color='tab:blue')
+   
+    # plot_dist(ax, x_pred, y_pred, color='tab:red')
+    
+    return smk_particles
+
+#
 def test_hsgp(seed=42):
     print('Generate data')
     key = jrnd.PRNGKey(seed)
@@ -42,16 +125,19 @@ def test_hsgp(seed=42):
     n = 100
     x = jnp.linspace(2, 3, n)[:, jnp.newaxis]
 
-    kernel_v = jk.RBF()
-    v = sample_prior(key_v, x=x, cov_fn=kernel_v, cov_params=dict(lengthscale=0.3, variance=4.))
+    ground_truth = {'kernel_v.lengthscale': 0.3, 'kernel_v.variance': 4.0,
+                    'kernel_f.variance': 10.0}
+
+    kernel_v = jk.RBF()    
+    v = sample_prior(key_v, x=x, cov_fn=kernel_v, cov_params=dict(lengthscale=ground_truth['kernel_v.lengthscale'], variance=ground_truth['kernel_v.variance']))
     V = jnp.exp(v)
 
     kernel_f = Brownian()
-    f = sample_prior(key_f, x=x, cov_fn=kernel_f, cov_params=dict(variance=10.0))
+    f = sample_prior(key_f, x=x, cov_fn=kernel_f, cov_params=dict(variance=ground_truth['kernel_v.variance']))
 
     y = f + jnp.sqrt(V)*jrnd.normal(key_y, shape=(n, ))
 
-    _, axes = plt.subplots(figsize=(12, 3), nrows=1, ncols=2, sharex=True)
+    _, axes = plt.subplots(figsize=(12, 3), nrows=1, ncols=2, sharex=True, constrained_layout=True)
     axes[0].plot(x, V)
     axes[0].set_title(r'Heteroskedastic observation variance $V(t)$')
     axes[1].plot(x, f)
@@ -60,6 +146,8 @@ def test_hsgp(seed=42):
     for ax in axes:
         ax.set_xlim([2., 3.])
         ax.set_xlabel(r'$t$')
+
+    plt.suptitle('A draw from the prior')
 
     print('Set up heteroskedastic GP model')
 
@@ -85,7 +173,19 @@ def test_hsgp(seed=42):
                             mode='gibbs-in-smc',
                             sampling_parameters=dict(num_particles=num_particles,
                                                     num_mcmc_steps=num_mcmc_steps))
+    
+    priors_flattened = flatten_dict(hsgp.param_priors)
 
+    M = len(priors_flattened)
+    _, axes = plt.subplots(nrows=1, ncols=M, figsize=(12, 3), constrained_layout=True)
+    symbols = {'kernel_v.lengthscale': r'\ell_v', 'kernel_v.variance': r'\tau_v', 'kernel_f.variance': r'\tau_f'}
+
+    for i, (ax, param) in enumerate(zip(axes, priors_flattened.keys())):
+        ax.hist(hsgp.particles.particles[param], density=True, bins=30)
+        ax.axvline(x=ground_truth[param], ls='--', color='k')
+        ax.set_xlabel(r'${:s}$'.format(symbols[param]))
+
+    plt.suptitle('Marginal posteriors of hyperparameters')
 
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3), sharex=True,
                             constrained_layout=True)
@@ -105,6 +205,8 @@ def test_hsgp(seed=42):
     for ax in axes:
         ax.set_xlim([2., 3.])
         ax.set_xlabel('t')
+
+    plt.suptitle('Posterior estimates of $V(t)$ and $f(t)$')
 
     print('Predictive')
 
@@ -132,7 +234,7 @@ def test_hsgp(seed=42):
     axes[1].plot(x, y, 'x', color='tab:orange', label='Obs')
 
     axes[0].set_ylim(bottom=0, top=30)
-    axes[1].set_ylim(bottom=-5, top=10)
+    axes[1].set_ylim(bottom=0, top=15)
 
     axes[0].set_title(r'Heteroskedastic variance $V(t)$')
     axes[1].set_title(r'Brownian motion $f(t)$ and observations $y(t)$')
@@ -144,8 +246,11 @@ def test_hsgp(seed=42):
         ax.set_xlabel('t')
 
     plot_dist(axes[1], x_pred, y_pred, color='tab:orange', label=r'$y(t*)$')
-    axes[0].legend();
-    axes[1].legend();
+    axes[0].legend()
+    axes[1].legend()
+    plt.suptitle('Posterior predictive distributions')
+
+    return hsgp
 
 #
 def test_fullgp(seed=42):

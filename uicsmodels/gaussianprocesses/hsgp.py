@@ -13,7 +13,7 @@ import jax.random as jrnd
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.bayesianmodels import GibbsState, BayesianModel
-from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params
+from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params
 
 class FullLatentHSGPModel(BayesianModel):
 
@@ -46,6 +46,9 @@ class FullLatentHSGPModel(BayesianModel):
         if component.startswith('kernel_'):
             return {param: position[f'{component}.{param}'] for param in
                 self.param_priors[component]} if component in self.param_priors else {}
+        if component.startswith('mean_'):
+            return {param: position[f'{component}.{param}'] for param in
+                self.param_priors[component]} if component in self.param_priors else {}
         return {param: position[param] for param in
                 self.param_priors[component]} if component in self.param_priors else {}
 
@@ -65,10 +68,9 @@ class FullLatentHSGPModel(BayesianModel):
                 else:
                     initial_position[param_name] = param_dist.sample(seed=subkey)
 
-
         # sample latent gps
         for name in ['v', 'f']:
-            mean_params = {param: initial_position[f'kernel_{name}.{param}'] for param in self.param_priors.get(f'mean_{name}', {})}
+            mean_params = {param: initial_position[f'mean_{name}.{param}'] for param in self.param_priors.get(f'mean_{name}', {})}
             cov_params = {param: initial_position[f'kernel_{name}.{param}'] for param in self.param_priors[f'kernel_{name}']}
 
             if num_particles > 1:
@@ -142,6 +144,22 @@ class FullLatentHSGPModel(BayesianModel):
                     position[f'kernel_{name}.{param}'] = val
 
             #
+            if len(mean_params):
+                cov_params = self.get_component_parameters(position, f'kernel_{name}')
+                key, subkey = jrnd.split(key)
+                sub_state, sub_info = update_gaussian_process_mean_params(subkey,
+                                                                        self.X,
+                                                                        position[name],
+                                                                        mean_fn=self.mean_fns[name],
+                                                                        cov_fn=self.cov_fns[name],
+                                                                        mean_params=mean_params,
+                                                                        cov_params=cov_params,
+                                                                        hyperpriors=self.param_priors[f'mean_{name}'])
+
+                for param, val in sub_state.items():
+                    position[f'mean_{name}.{param}'] = val
+
+            #
         #
         return GibbsState(position=position), None  # todo: incorporate sampling info
 
@@ -203,7 +221,7 @@ class FullLatentHSGPModel(BayesianModel):
         num_particles = self.get_monte_carlo_samples()[latent].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        mean_params = {param: self.get_monte_carlo_samples()[f'kernel_{latent}.{param}'] for param in self.param_priors.get(f'mean_{latent}', {})}
+        mean_params = {param: self.get_monte_carlo_samples()[f'mean_{latent}.{param}'] for param in self.param_priors.get(f'mean_{latent}', {})}
         cov_params = {param: self.get_monte_carlo_samples()[f'kernel_{latent}.{param}'] for param in self.param_priors[f'kernel_{latent}']}
 
         sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
