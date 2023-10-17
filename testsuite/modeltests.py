@@ -20,7 +20,7 @@ from collections.abc import MutableMapping
 
 from uicsmodels.gaussianprocesses.gputil import sample_prior
 from uicsmodels.gaussianprocesses.hsgp import FullLatentHSGPModel
-from uicsmodels.gaussianprocesses.kernels import Brownian, SpectralMixture
+from uicsmodels.gaussianprocesses.kernels import Brownian, SpectralMixture, centered_softmax
 from uicsmodels.gaussianprocesses.meanfunctions import Constant
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
 
@@ -49,13 +49,13 @@ def test_smk(seed=42):
     print('Generate data')
 
     n = 200
-    obs_noise = 0.2
+    obs_noise = 0.3
 
     key = jrnd.PRNGKey(seed)
     key, key_x, key_y = jrnd.split(key, 3)
 
     x = jnp.sort(jrnd.uniform(key=key_x, minval=-3.0, maxval=3.0, shape=(n,))).reshape(-1, 1)
-    f = lambda x: 10*jnp.sin(12 * x) + 5*jnp.cos(2 * x) + 2*jnp.sin(6 * (x - 2))
+    f = lambda x: 10*jnp.sin(x) + jnp.cos(15*x)
     signal = f(x)
     y = (signal + jrnd.normal(key_y, shape=signal.shape) * obs_noise).flatten()
 
@@ -66,9 +66,10 @@ def test_smk(seed=42):
     plt.plot(x, y, 'o', c='tab:orange')
     plt.xlabel(r'$x$')
     plt.ylabel(r'$y$')
+    plt.title('Observations')
     plt.xlim([-3, 3]);
 
-    Q = 3
+    Q = 2
 
     priors = dict(kernel=dict(beta=dx.Normal(loc=jnp.zeros((Q-1, )),
                                             scale=jnp.ones((Q-1, ))),
@@ -84,31 +85,53 @@ def test_smk(seed=42):
     print('Inference')
     key, subkey = jrnd.split(key)
     num_particles = 1_000
+    num_mcmc_steps = 100
 
     gp_smk = FullMarginalGPModel(x, y, cov_fn=SpectralMixture(), priors=priors)
     smk_particles, _, _ = gp_smk.inference(subkey, mode='gibbs-in-smc',
                                            sampling_parameters=dict(num_particles=num_particles,
-                                                                    num_mcmc_steps=100))
+                                                                    num_mcmc_steps=num_mcmc_steps))
 
-    plt.figure(figsize=(12, 3))
-    ax = plt.gca()
+    w = jax.vmap(centered_softmax, in_axes=0)(smk_particles.particles['beta'])
+    _, axes = plt.subplots(nrows=3, ncols=Q, figsize=(12, 9), constrained_layout=True)
     for q in range(Q):
-        ax.hist(smk_particles.particles['mu'][:,q], 
+        axes[0, q].hist(jnp.abs(smk_particles.particles['mu'][:,q]) * (2*jnp.pi), 
                  density=True, bins=30, alpha=0.5)
-        ax.set_xlabel(r'$\mu_q$')
+        axes[0, q].set_title(r'$\mu_{:d}$'.format(q+1))
+        axes[0, q].set_xlabel(r'$\omega$')
+        axes[1, q].hist(smk_particles.particles['nu'][:,q], 
+                 density=True, bins=30, alpha=0.5)
+        axes[1, q].set_title(r'$\nu_{:d}$'.format(q+1))
+        axes[1, q].set_xlabel(r'$\omega$')
+        axes[2, q].hist(w[:, q], 
+                 density=True, bins=30, alpha=0.5)
+        axes[2, q].set_title(r'$w_{:d}$'.format(q+1))
+
+    plt.suptitle('Component parameters')
 
     print('Prediction')
 
     plt.figure(figsize=(12, 3))
     ax = plt.gca()
 
-    x_pred = jnp.linspace(-5, 5, num=300)[:, jnp.newaxis]
+    x_pred = jnp.linspace(-6, 6, num=300)[:, jnp.newaxis]
     key, key_f, key_y = jrnd.split(key, 3)
     f_pred = gp_smk.predict_f(key_f, x_pred)  
     y_pred = gp_smk.predict_y(key_y, x_pred)      
 
     for i in jnp.arange(0, num_particles, step=50):
         ax.plot(x_pred, f_pred[i, :], alpha=0.1, color='tab:blue')
+
+    ax.plot(jnp.linspace(-3, 3, num=300).reshape(-1, 1),
+            f(jnp.linspace(-3, 3, num=300).reshape(-1, 1)),
+            color='tab:green')
+    ax.plot(x, y, 'o', c='tab:orange')
+    for lim in [-3, 3]:
+        ax.axvline(x=lim, ls='--', color='k')
+    ax.set_xlim([-6, 6])
+    ax.set_title('Extrapolation')
+    ax.set_xlabel(r'$x$')
+    ax.set_ylabel(r'$y$')
    
     # plot_dist(ax, x_pred, y_pred, color='tab:red')
     
