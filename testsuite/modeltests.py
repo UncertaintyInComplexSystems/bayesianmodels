@@ -9,8 +9,6 @@ import jaxkern as jk
 from jax.config import config
 config.update("jax_enable_x64", True)  # crucial for Gaussian processes
 config.update("jax_default_device", jax.devices()[0])
-print('Jax version:', jax.__version__)
-print('Jax default backend:', jax.default_backend())  # check if we're using the GPU
 
 from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
@@ -45,6 +43,7 @@ def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str ='.') -> Muta
     return dict(items)
 
 #
+
 def test_smk(seed=42):
     print('Generate data')
 
