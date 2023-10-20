@@ -11,6 +11,17 @@ from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussia
 
 jitter = 1e-6
 
+def plot_dist(ax, x, samples, **kwargs):
+    f_mean = jnp.mean(samples, axis=0)
+    f_hdi_lower = jnp.percentile(samples, q=2.5, axis=0)
+    f_hdi_upper = jnp.percentile(samples, q=97.5, axis=0)
+    color = kwargs.get('color', 'tab:blue')
+    ax.plot(x, f_mean, lw=2, **kwargs)
+    ax.fill_between(x.flatten(), f_hdi_lower, f_hdi_upper,
+                    alpha=0.2, lw=0, color=color)
+
+#
+
 def sample_predictive(key: PRNGKey, 
                       x: Array, 
                       z: Array, 
@@ -144,7 +155,7 @@ def update_gaussian_process_mean_params(key: PRNGKey, X: Array,
         return log_pdf
 
     #
-    return update_metropolis(key, logdensity_fn_, mean_params, stepsize=0.1)
+    return update_metropolis(key, logdensity_fn_, mean_params, stepsize=0.01)
 
 #
 def update_gaussian_process_obs_params(key: PRNGKey, y: Array,
@@ -162,5 +173,5 @@ def update_gaussian_process_obs_params(key: PRNGKey, y: Array,
 
     #
     key, subkey = jrnd.split(key)
-    return update_metropolis(subkey, logdensity_fn_, obs_params, stepsize=0.1)
+    return update_metropolis(subkey, logdensity_fn_, obs_params, stepsize=0.01)
  
