@@ -79,4 +79,5 @@ venv.bak/
 
 # others
 data
+results/
 environment.yml.bak
