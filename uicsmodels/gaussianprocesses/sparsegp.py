@@ -27,7 +27,7 @@ tfb = tfp.bijectors
 jitter = 1e-6
 
 
-class SparseGPModel(FullGPModel):
+class SparseGPModel(FullGPModel):  # TODO: Switch to use BayesianModel
 
     """The latent Gaussian process model.
     
@@ -94,7 +94,6 @@ class SparseGPModel(FullGPModel):
         print('# init_fn:')
         
         # Get all needed Random Keys 
-        # HACK? Is there a more elegant way to assign the subkeys their variable names?
         key, *sub_key = jrnd.split(key, num=3)
         key_super_init = sub_key[0]
         key_sample_latents = sub_key[1]
@@ -102,6 +101,7 @@ class SparseGPModel(FullGPModel):
         initial_state = super().init_fn(key_super_init, num_particles)
 
         def sample_latent(key, initial_position_):
+            # TODO: Split into seperate functions
             _, *sub_key = jrnd.split(key, num=4)
             key_sample_z = sub_key[0]
             key_sample_u = sub_key[1]
@@ -221,8 +221,10 @@ class SparseGPModel(FullGPModel):
             # dictionary, rather than over the dictionary itself.
             # DOLATER: u and Z won't be contained in gibbs_State if SMC is used.
             raise NotImplementedError
-            initial_position['f'] = jax.vmap(sample_latent,
-                                             in_axes=(0, {k: 0 for k in initial_position}))(key_sample_latents, initial_position)
+            initial_position['f'] = jax.vmap(
+                sample_latent,
+                in_axes = (0, {k: 0 for k in initial_position}))
+            (key_sample_latents, initial_position)
         else:
             # HACK: Might be better to recieve a namedtuple from from `sample_latent`, or two tuples, one with names and the other with corresponding data
             samples_Z, samples_u, samples_f, dev = sample_latent(key_sample_latents, initial_position)
