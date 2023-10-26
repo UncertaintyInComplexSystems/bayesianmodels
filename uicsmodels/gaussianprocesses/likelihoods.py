@@ -7,7 +7,8 @@ from jax import Array
 from jaxtyping import Float
 from typing import Union, Dict, Any, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
-
+from distrax._src.distributions.distribution_from_tfp import distribution_from_tfp
+from tensorflow_probability.substrates import jax as tfp
 
 def inv_probit(x) -> Float:
     """Compute the inverse probit function.
@@ -38,7 +39,6 @@ class AbstractLikelihood(ABC):
         pass
 
     #
-
     @abstractmethod
     def log_prob(self, params, f, y):
         pass
@@ -58,7 +58,6 @@ class Gaussian(AbstractLikelihood):
         return f
     
     #
-
     def likelihood(self, params, f):
         return dx.Normal(loc=self.link_function(f), scale=params['obs_noise'])
 
@@ -67,7 +66,6 @@ class Gaussian(AbstractLikelihood):
 
 class Bernoulli(AbstractLikelihood):
 
-
     def link_function(self, f):
         """Transform f \in R^D to [0,1]^D
 
@@ -75,9 +73,25 @@ class Bernoulli(AbstractLikelihood):
         return inv_probit(f)
 
     #
-
     def likelihood(self, params, f):
         return dx.Bernoulli(probs=self.link_function(f))
 
     #
 #
+
+class Poisson(AbstractLikelihood):
+
+    def link_function(self, f):
+        """Transform from f \in R to R+
+
+        """
+        return jnp.exp(f)
+
+    #
+    def likelihood(self, params, f):
+        """Distrax wrapper around a Tensorflow Probability distribution
+
+        """
+        return distribution_from_tfp(tfp.distributions.Poisson(rate=self.link_function(f)))
+
+    #

@@ -1,5 +1,6 @@
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
+from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params, update_gaussian_process_obs_params
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 
@@ -33,7 +34,7 @@ class FullGPModel(BayesianModel):
         if mean_fn is None:
             mean_fn = Zero()
         self.mean_fn = mean_fn
-        self.kernel = cov_fn
+        self.cov_fn = cov_fn
         self.param_priors = priors
         # TODO:
         # - assert whether all trainable parameters have been assigned priors
@@ -56,11 +57,11 @@ class FullGPModel(BayesianModel):
         initial_position = dict()
         for component, comp_priors in self.param_priors.items():
             for param, param_dist in comp_priors.items():
-                key, _ = jrnd.split(key)
+                key, subkey = jrnd.split(key)
                 if num_particles > 1:
-                    initial_position[param] = param_dist.sample(seed=key, sample_shape=(num_particles,))
+                    initial_position[param] = param_dist.sample(seed=subkey, sample_shape=(num_particles,))
                 else:
-                    initial_position[param] = param_dist.sample(seed=key)
+                    initial_position[param] = param_dist.sample(seed=subkey)
         return GibbsState(position=initial_position)
 
     # 
@@ -80,19 +81,7 @@ class FullGPModel(BayesianModel):
         raise NotImplementedError
 
     #
-    def smc_init_fn(self, position: ArrayTree, kwargs):
-        """Simply wrap the position dictionary in a GibbsState object. 
-
-        Args:
-            position: dict
-                Current assignment of the state values
-            kwargs: not used in our Gibbs kernel
-        Returns:
-            A Gibbs state object.
-        """
-        return GibbsState(position)
-
-    #
+    
 
 #
         
@@ -161,42 +150,28 @@ class FullLatentGPModel(FullGPModel):
         """
 
         initial_state = super().init_fn(key, num_particles)
-
-        def sample_latent(key, initial_position_):
-            if 'mean_function' in self.param_priors.keys():
-                mean_params = {param: initial_position_[param] for param in self.param_priors['mean_function']}
-                mean = self.mean_fn.mean(params=mean_params, x=self.X)
-            else:
-#                 mean = jnp.zeros_like(self.X)
-                mean = jnp.zeros((self.X.shape[0], ))
-            if jnp.ndim(mean) == 1:
-                mean = mean[:, jnp.newaxis]
-
-            if 'kernel' in self.param_priors.keys():
-                cov_params = {param: initial_position_[param] for param in self.param_priors['kernel']}
-                cov = self.kernel.cross_covariance(params=cov_params,
-                                                   x=self.X,
-                                                   y=self.X) + jitter * jnp.eye(self.n)
-            else:
-                cov = jnp.eye(self.n)
-
-            L = jnp.linalg.cholesky(cov)
-            z = jrnd.normal(key, shape=(self.n, 1))
-            f = jnp.asarray(mean + jnp.dot(L, z))
-            return f.flatten()
-
-        #
         initial_position = initial_state.position
 
+        mean_params = {param: initial_position[param] for param in self.param_priors.get(f'mean', {})}
+        cov_params = {param: initial_position[param] for param in self.param_priors[f'kernel']}
+
         if num_particles > 1:
-            keys = jrnd.split(key, num_particles)
-            # We vmap across the first dimension of the elements *in* the
-            # dictionary, rather than over the dictionary itself.
-            initial_position['f'] = jax.vmap(sample_latent,
-                                             in_axes=(0, {k: 0 for k in initial_position}))(keys, initial_position)
+            keys = jrnd.split(key, num_particles)                
+            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(key=key_, 
+                                                                                mean_params=mean_params_,
+                                                                                cov_params=cov_params_,
+                                                                                mean_fn=self.mean_fn,
+                                                                                cov_fn=self.cov_fn, 
+                                                                                x=self.X)
+            initial_position['f'] = jax.vmap(sample_fun,
+                                                in_axes=(0,
+                                                        {k: 0 for k in mean_params},
+                                                        {k: 0 for k in cov_params}))(keys, mean_params, cov_params)
         else:
-            key, _ = jrnd.split(key)
-            initial_position['f'] = sample_latent(key, initial_position)
+            key, subkey = jrnd.split(key)
+            initial_position['f'] = sample_prior(subkey, self.mean_fn, 
+                                                    self.cov_fn, mean_params, 
+                                                    cov_params, self.X)
 
         return GibbsState(initial_position)
 
@@ -230,37 +205,39 @@ class FullLatentGPModel(FullGPModel):
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
         mean_params = self.__get_component_parameters(position, 'mean')
-        mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
+        # mean = self.mean_fn.mean(params=mean_params, x=self.X).flatten()
 
         cov_params = self.__get_component_parameters(position, 'kernel')
-        cov = self.kernel.cross_covariance(params=cov_params,
-                                           x=self.X, y=self.X) + jitter * jnp.eye(self.n)
+        # cov = self.cov_fn.cross_covariance(params=cov_params,
+        #                                    x=self.X, y=self.X) + jitter * jnp.eye(self.n)
 
         key, subkey = jrnd.split(key)
-        position['f'], f_info = update_correlated_gaussian(subkey, position['f'], loglikelihood_fn_, mean, cov)
+        position['f'], f_info = update_gaussian_process(subkey,
+                                                        position['f'],
+                                                        loglikelihood_fn_,
+                                                        self.X,
+                                                        mean_fn=self.mean_fn,
+                                                        cov_fn=self.cov_fn,
+                                                        mean_params=mean_params,
+                                                        cov_params=cov_params)
 
         if len(mean_params):
             """Sample parameters of the mean function using: 
 
             p(psi | f, theta) \propto p(f | psi, theta)p(psi)
 
-            """
-
-            def logdensity_fn_(psi_):
-                log_pdf = 0
-                for param, val in psi_.items():
-                    log_pdf += jnp.sum(self.param_priors['mean'][param].log_prob(val))
-                mean = self.mean_fn.mean(params=psi_, x=self.X).flatten()
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
-                return log_pdf
-
-            #
+            """            
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, mean_params, stepsize=mcmc_parameters.get('stepsizes', dict()).get('mean', 0.1))
+            sub_state, sub_info = update_gaussian_process_mean_params(subkey, self.X,
+                                       position['f'],
+                                       mean_fn=self.mean_fn,
+                                       cov_fn=self.cov_fn,
+                                       mean_params=mean_params,
+                                       cov_params=cov_params,
+                                       hyperpriors=self.param_priors['kernel'])
             for param, val in sub_state.items():
                 position[param] = val
-
-            mean = self.mean_fn.mean(params=sub_state, x=self.X).flatten()
+            
         #
 
         if len(cov_params):
@@ -269,19 +246,14 @@ class FullLatentGPModel(FullGPModel):
             p(theta | f, psi) \propto p(f | psi, theta)p(theta)
 
             """
-
-            def logdensity_fn_(theta_):
-                log_pdf = 0
-                for param, val in theta_.items():
-                    log_pdf += jnp.sum(self.param_priors['kernel'][param].log_prob(val))
-                cov_ = self.kernel.cross_covariance(params=theta_, x=self.X, y=self.X) + jitter * jnp.eye(self.n)
-                log_pdf += dx.MultivariateNormalFullCovariance(mean, cov_).log_prob(position['f'])
-                return log_pdf
-
-            #
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, cov_params, 
-                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('kernel', 0.1))
+            sub_state, sub_info = update_gaussian_process_cov_params(subkey, self.X,
+                                       position['f'],
+                                       mean_fn=self.mean_fn,
+                                       cov_fn=self.cov_fn,
+                                       mean_params=mean_params,
+                                       cov_params=cov_params,
+                                       hyperpriors=self.param_priors['kernel'])
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -293,17 +265,14 @@ class FullLatentGPModel(FullGPModel):
 
             """
 
-            def logdensity_fn_(phi_):
-                log_pdf = 0
-                for param, val in phi_.items():
-                    log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
-                return log_pdf
-
-            #
             key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, 
-                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('likelihood', 0.1))
+            sub_state, sub_info = update_gaussian_process_obs_params(subkey, self.y,
+                                       position['f'],
+                                       temperature=temperature,
+                                       likelihood=self.likelihood,
+                                       obs_params=likelihood_params,
+                                       hyperpriors=self.param_priors['likelihood'])
+
             for param, val in sub_state.items():
                 position[param] = val
         #
@@ -358,7 +327,7 @@ class FullLatentGPModel(FullGPModel):
             theta = {param: position[param] for param in
                      self.param_priors['kernel']} if 'kernel' in self.param_priors else {}
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            cov = self.kernel.cross_covariance(params=theta,
+            cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
                                                y=self.X) + jitter * jnp.eye(self.n)
             logprob += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
@@ -368,107 +337,58 @@ class FullLatentGPModel(FullGPModel):
         return logprior_fn_
 
     #
-    def predict_f(model, key: PRNGKey, x_pred: ArrayTree, num_subsample=-1):
-        """Predict the latent f on unseen pointsand
-
-        This function takes the approximated posterior (either by MCMC or SMC)
-        and predicts new latent function evaluations f^*.
-
-        Args:
-            key: PRNGKey
-            x_pred: x^*; the queried locations.
-            num_subsample: By default, we return one predictive sample for each
-            posterior sample. While accurate, this can be memory-intensive; this
-            parameter can be used to thin the MC output to every n-th sample.
-
-        Returns:
-            f_samples: An array of samples of f^* from p(f^* | x^*, x, y)
-
-
-        todo:
-        - predict using either SMC or MCMC output
-        - predict from prior if desired
-        """
-
-        @jax.jit
-        def sample_predictive_f(key, x_pred: ArrayTree, **samples):
-            """Sample latent f for new points x_pred given one posterior sample.
-
-            See Rasmussen & Williams. We are sampling from the posterior predictive for
-            the latent GP f, at this point not concerned with an observation model yet.
-
-            We have [f, f*]^T ~ N(0, KK), where KK is a block matrix:
-
-            KK = [[K(x, x), K(x, x*)], [K(x, x*)^T, K(x*, x*)]]
-
-            This results in the conditional
-
-            f* | x, x*, f ~ N(mu, cov), where
-
-            mu = K(x*, x)K(x,x)^-1 f
-            cov = K(x*, x*) - K(x*, x) K(x, x)^-1 K(x, x*)
-
-            Args:
-                key: The jrnd.PRNGKey object
-                x_pred: The prediction locations x*
-                state_variables: A sample from the posterior
-
-            Returns:
-                A single posterior predictive sample f*
-
-            """
-
-            def get_parameters_for(component):
-                """Extract parameter sampled values per model component for current
-                position.
-
-                """
-                return {param: samples[param] for param in
-                        model.param_priors[component]} if component in model.param_priors else {}
-
-            #
-
-            f = samples['f']
-            psi = get_parameters_for('mean')
-            mean = model.mean_fn.mean(params=psi, x=x_pred).flatten()
-            theta = get_parameters_for('kernel')
-
-            Kxx = model.kernel.cross_covariance(params=theta, x=model.X, y=model.X)
-            Kzx = model.kernel.cross_covariance(params=theta, x=x_pred, y=model.X)
-            Kzz = model.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
-
-            Kxx += jitter * jnp.eye(*Kxx.shape)
-            Kzx += jitter * jnp.eye(*Kzx.shape)
-            Kzz += jitter * jnp.eye(*Kzz.shape)
-
-            L = jnp.linalg.cholesky(Kxx)
-            alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, f))
-            v = jnp.linalg.solve(L, Kzx.T)
-            predictive_mean = mean + jnp.dot(Kzx, alpha)
-            predictive_var = Kzz - jnp.dot(v.T, v)
-
-            predictive_var += jitter * jnp.eye(*Kzz.shape)
-
-            C = jnp.linalg.cholesky(predictive_var)
-            z = jrnd.normal(key, shape=(len(x_pred),))
-
-            f_samples = predictive_mean + jnp.dot(C, z)
-            return f_samples
-
-        #
-
-        num_particles = model.particles.particles['f'].shape[0]
+    def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples['f'].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        f_pred = jax.vmap(sample_predictive_f,
-                            in_axes=(0, None))(key_samples, x_pred, 
-                                            **model.particles.particles)
-        return f_pred
+        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
+        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
+
+        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
+                                                                            mean_params=mean_params, 
+                                                                            cov_params=cov_params, 
+                                                                            mean_fn=self.mean_fn,
+                                                                            cov_fn=self.cov_fn, 
+                                                                            x=self.X, 
+                                                                            z=x_pred, 
+                                                                            target=target)
+        keys = jrnd.split(key, num_particles)
+        target_pred = jax.vmap(jax.jit(sample_fun), 
+                        in_axes=(0, 
+                        {k: 0 for k in mean_params}, 
+                            {k: 0 for k in cov_params}, 
+                                0))(keys, 
+                                    mean_params, 
+                                    cov_params, 
+                                    samples['f'])
+
+        return target_pred
 
     #
-    def predict_y(self, key, x_pred):
-        # todo; call predict_f first, then the dx random from the appropriate likelihood
-        pass
+    def predict_y(self, key: PRNGKey, x_pred: Array):
+        """Posterior predictive distribution p(y* | f*, x*)
+
+        """
+        assert hasattr(self, 'particles'), 'No particles available'
+
+        def forward(key, params, f):
+            return self.likelihood.likelihood(params, f).sample(seed=key)
+
+        #
+        key, key_f, key_y = jrnd.split(key, 3)
+        f_pred = self.predict_f(key_f, x_pred)
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples['f'].shape[0]
+        keys_y = jrnd.split(key_y, num_particles)
+        likelihood_params = {param: samples[param] for param in self.param_priors['likelihood']}
+        y_pred = jax.vmap(jax.jit(forward), 
+                          in_axes=(0, 
+                                    {k: 0 for k in likelihood_params}, 
+                                    0))(keys_y, 
+                                    likelihood_params, 
+                                    f_pred)
+        return y_pred
 
     #
 #
@@ -499,6 +419,7 @@ class FullMarginalGPModel(FullGPModel):
                  mean_fn: Callable = None,
                  priors: Dict = None):
         super().__init__(X, y, cov_fn, mean_fn, priors)
+        self.likelihood = Gaussian()
 
     #
     def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
@@ -551,7 +472,7 @@ class FullMarginalGPModel(FullGPModel):
 
             sigma = state['obs_noise']
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            cov = self.kernel.cross_covariance(params=theta,
+            cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
                                                y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.n)
             logprob = dx.MultivariateNormalFullCovariance(mean, cov).log_prob(self.y)
@@ -606,81 +527,60 @@ class FullMarginalGPModel(FullGPModel):
         - predict using either SMC or MCMC output
         - predict from prior if desired
         """
+        
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples[list(samples.keys())[0]].shape[0]
+        key_samples = jrnd.split(key, num_particles)
 
-        @jax.jit
-        def sample_predictive_f(key, x_pred: ArrayTree, **state_variables):
-            """Sample latent f for new points x_pred given one posterior sample.
+        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
+        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
 
-            See Rasmussen & Williams. We are sampling from the posterior predictive for
-            the latent GP f, at this point not concerned with an observation model yet.
+        sample_fun = lambda key, mean_params_, cov_params_, obs_noise_: sample_predictive(key, 
+                                                                            mean_params=mean_params_, 
+                                                                            cov_params=cov_params_, 
+                                                                            mean_fn=self.mean_fn,
+                                                                            cov_fn=self.cov_fn, 
+                                                                            x=self.X, 
+                                                                            z=x_pred, 
+                                                                            target=self.y,
+                                                                            obs_noise=obs_noise_)
+        keys = jrnd.split(key, num_particles)
+        target_pred = jax.vmap(jax.jit(sample_fun), 
+                        in_axes=(0, 
+                                {k: 0 for k in mean_params}, 
+                                {k: 0 for k in cov_params},
+                                0))(keys, 
+                                        mean_params, 
+                                        cov_params,
+                                        samples['obs_noise'])
 
-            We have [f, f*]^T ~ N(0, KK), where KK is a block matrix:
+        return target_pred
 
-            KK = [[K(x, x), K(x, x*)], [K(x, x*)^T, K(x*, x*)]]
+    #
+    def predict_y(self, key: PRNGKey, x_pred: Array):
+        # todo: make part of superclass
+        """Posterior predictive distribution p(y* | f*, x*)
 
-            This results in the conditional
+        """
+        assert hasattr(self, 'particles'), 'No particles available'
 
-            f* | x, x*, f ~ N(mu, cov), where
-
-            mu = K(x*, x)K(x,x)^-1 f
-            cov = K(x*, x*) - K(x*, x) K(x, x)^-1 K(x, x*)
-
-            Args:
-                key: The jrnd.PRNGKey object
-                x_pred: The prediction locations x*
-                state_variables: A sample from the posterior
-
-            Returns:
-                A single posterior predictive sample f*
-
-            """
-
-            def get_parameters_for(component):
-                """Extract parameter sampled values per model component for current
-                position.
-
-                """
-                return {param: state_variables[param] for param in
-                        self.param_priors[component]} if component in self.param_priors else {}
-
-            #
-
-            jitter = 1e-6
-
-            # to implement!
-            psi = get_parameters_for('mean')
-            mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            theta = get_parameters_for('kernel')
-            sigma = get_parameters_for('likelihood')['obs_noise']
-
-            Kxx = self.kernel.cross_covariance(params=theta, x=self.X, y=self.X)
-            Kzx = self.kernel.cross_covariance(params=theta, x=self.X, y=x_pred)
-            Kzz = self.kernel.cross_covariance(params=theta, x=x_pred, y=x_pred)
-
-            L = jnp.linalg.cholesky(Kxx + sigma ** 2 * jnp.eye(*Kxx.shape))
-            alpha = jnp.linalg.solve(L.T, jnp.linalg.solve(L, self.y))
-            v = jnp.linalg.solve(L, Kzx)
-            predictive_mean = jnp.dot(Kzx.T, alpha)
-            predictive_var = Kzz - jnp.dot(v.T, v) + jitter * jnp.eye(*Kzz.shape)
-
-            C = jnp.linalg.cholesky(predictive_var)
-            z = jrnd.normal(key, shape=(len(x_pred),))
-
-            f_samples = predictive_mean + jnp.dot(C, z)
-            return f_samples
+        def forward(key, params, f):
+            return self.likelihood.likelihood(params, f).sample(seed=key)
 
         #
-        if hasattr(self, 'particles'):
-            samples = self.particles.particles
-        elif hasattr(self, 'states'):
-            samples = self.states.position
-                
-        num_samples = samples['obs_noise'].shape[0]
-        key_samples = jrnd.split(key, num_samples)
-
-        f_pred = jax.vmap(sample_predictive_f,
-                          in_axes=(0, None))(key_samples, x_pred, **samples)
-        return f_pred
+        key, key_f, key_y = jrnd.split(key, 3)
+        f_pred = self.predict_f(key_f, x_pred)
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples[list(samples.keys())[0]].shape[0]
+        keys_y = jrnd.split(key_y, num_particles)
+        likelihood_params = {param: samples[param] for param in self.param_priors['likelihood']}
+        y_pred = jax.vmap(jax.jit(forward), 
+                          in_axes=(0, 
+                                    {k: 0 for k in likelihood_params}, 
+                                    0))(keys_y, 
+                                    likelihood_params, 
+                                    f_pred)
+        return y_pred
 
     #
 

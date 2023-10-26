@@ -7,11 +7,12 @@ from jax.typing import ArrayLike
 from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
+from uicsmodels.gaussianprocesses.meanfunctions import Zero
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 from blackjax import elliptical_slice, rmh
 
-__all__ = ['inference_loop', 'smc_inference_loop']
+__all__ = ['inference_loop', 'smc_inference_loop', 'update_gaussian_process', 'update_gaussian_process_cov_params']
 
 
 def smc_inference_loop(rng_key: PRNGKey, smc_kernel: Callable, initial_state):
