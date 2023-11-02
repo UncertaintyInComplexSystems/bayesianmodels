@@ -17,9 +17,6 @@ from jax.random import PRNGKey
 import jax.random as jrnd
 
 
-jitter = 1e-6
-
-
 class FullLatentWishartModel(FullLatentGPModel):
 
     """The latent Wishart process model.
@@ -28,7 +25,7 @@ class FullLatentWishartModel(FullLatentGPModel):
 
     .. math::
         psi     &\sim p(\psi)\\
-        theta   &\sim p(\theta) && s.t. \tau=1\\
+        theta   &\sim p(\theta) && s.t. \tau=1\\ 
         phi     &\sim p(\phi) \\
         f_id    &\sim GP(mu, cov) \\
         f_i     &= (f_i1, ..., f_iD)^T
@@ -38,6 +35,10 @@ class FullLatentWishartModel(FullLatentGPModel):
     Here, the scalar parameters are sampled using Gaussian random walk MCMC,
     while the latent function f (or rather its evaluations) is sampled using
     Elliptical Slice Sampling.
+
+    Since the Wishart process is just a Gaussian process with multiple 
+    independent latent GPs, and a new likelihood, we inherit most functionality 
+    from FullLatentGPModel.
 
     """
 
@@ -68,6 +69,9 @@ class FullLatentWishartModel(FullLatentGPModel):
 
         When num_particles > 1, each dict element contains num_particles random
         initial values.
+
+        For the Wishart process, f is of shape (n, nu, d). The same mean and
+        covariance functions are broadcasted over all trailing dimensions.
 
         Args:
             key:
