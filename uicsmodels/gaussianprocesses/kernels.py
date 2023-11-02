@@ -2,31 +2,91 @@ import jax
 import jaxkern as jk
 import jax.numpy as jnp
 import jax.random as jrnd
-from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional
+from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, List
 from jaxtyping import Array, Float
 from jax.nn import softmax
 
+def centered_softmax(beta):
+    return softmax(jnp.insert(beta, 0, 0.0))
+
+#
+class DefaultingKernel(jk.base.AbstractKernel):
+    """Constructs a kernel with default values for a subset of its hyperparameters.
+
+    For example, we might use a jk.RBF() base kernel, but force its variance
+    to be 1.0. Using 
+    
+    kernel = DefaultingKernel(base_kernel=jk.RBF(), defaults=dict(variance=1.0))
+
+    this can be accomplished.
+    
+    """
+
+    def __init__(self, base_kernel, defaults: Dict) -> None:
+        self.base_kernel = base_kernel
+        self.defaults = defaults
+
+    #
+    def __call__(
+        self, params: Dict, x: Float[Array, "1 D"], y: Float[Array, "1 D"]
+    ) -> Float[Array, "1"]:
+        return self.cross_covariance(params, x, y)
+
+    #
+    def cross_covariance(self, params: Dict, x, y):
+        """Computes the discontinuous cross-covariance.
+
+        The bread-and-butter of the discontinuity analysis removes all
+        correlations between observations on different sides of the threshold
+        x0.
+
+        Args:
+            params: Parameters of the base kernel.
+            x, y: points to determine covariance for
+        Returns:
+            an nxm matrix of cross covariances (n = len(x), m = len(y))
+        """
+
+        params = {**params, **self.defaults}
+        K = self.base_kernel.cross_covariance(params, x, y)
+        return K
+
+    #
+    def init_params(self, key: Array) -> dict:
+        self.base_kernel.init_params(key)
+
+    #
+#
+
 class Brownian(jk.base.AbstractKernel):
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, active_dims: Optional[List[int]] = None, name: Optional[str] = "Brownian motion") -> None:
+        self.active_dims = active_dims
+        self.name = name
+        self._stationary = False
+        self.ndims = 1 if not self.active_dims else len(self.active_dims)
 
     #
     def __call__(self, params: Dict, x: Float[Array, "1 D"], y: Float[Array, "1 D"]) -> Float[Array, "1"]:
         return self.cross_covariance(params, x, y)
 
     #
-    def cross_covariance(self, params: Dict, x, y):
+    def cross_covariance(self, params: Dict, x, y) -> Float[Array, "1"]:
         # see https://github.com/SheffieldML/GPy/blob/devel/GPy/kern/src/brownian.py
+        x = self.slice_input(x)
+        y = self.slice_input(y)
         n_x = x.shape[0]
         n_y = y.shape[0]
         x_mat = jnp.tile(jnp.squeeze(x), (n_y, 1))
         y_mat = jnp.tile(jnp.squeeze(y), (n_x, 1)).T        
-        return (params['variance'] * jnp.where(jnp.sign(x_mat)==jnp.sign(y_mat), jnp.fmin(jnp.abs(x_mat), jnp.abs(y_mat)), 0)).T
+        return jnp.squeeze((params['variance'] * jnp.where(jnp.sign(x_mat)==jnp.sign(y_mat), jnp.fmin(jnp.abs(x_mat), jnp.abs(y_mat)), 0)).T)
 
     #
     def init_params(self, key: Array) -> dict:
-        super().init_params(key)
+        params = {           
+            "variance": jnp.array([1.0]),
+        }
+        return jax.tree_util.tree_map(lambda x: jnp.atleast_1d(x), params)
 
     #
 #
@@ -35,7 +95,7 @@ class SpectralMixture(jk.base.AbstractKernel):
 
     def __init__(self) -> None:
         # Note: we don't want to inherit here.
-        pass
+        self.name = 'Spectral mixture'
         
     #
     def __call__(
@@ -103,10 +163,12 @@ class SpectralMixture(jk.base.AbstractKernel):
             return res, el
 
         #
+        x = self.slice_input(x)
+        y = self.slice_input(y)
         
         tau = jnp.sqrt(self.__euclidean_distance_einsum(x, y))
         beta = params['beta']
-        w = softmax(jnp.insert(beta, 0, 0))
+        w = centered_softmax(beta)
         mu = params['mu']
         # To solve the identifiability issue in mixture models, we sort according to the means:
         mu = jnp.sort(mu)
@@ -131,6 +193,7 @@ class Discontinuous(jk.base.AbstractKernel):
     def __init__(self, base_kernel, x0: Float = 0.0) -> None:
         self.base_kernel = base_kernel
         self.x0 = x0
+        self.name = 'Discontinuous'
         
     #
     def __call__(
@@ -171,3 +234,37 @@ class Discontinuous(jk.base.AbstractKernel):
     #
 
 #
+class SmoothWalk(jk.base.AbstractKernel):
+    # See Ambrogioni, 2023: https://arxiv.org/abs/2310.02877
+    # To test this, we need to change how we initialize the SMC procedure, as we cannot sample from this improper prior
+    
+    def __init__(self, active_dims: Optional[List[int]] = None, name: Optional[str] = "Smooth walk") -> None:
+        self.active_dims = active_dims
+        self.name = name
+        self._stationary = False
+        self.ndims = 1 if not self.active_dims else len(self.active_dims)
+
+    #
+    def __call__(self, params: Dict, x: Float[Array, "1 D"], y: Float[Array, "1 D"]) -> Float[Array, "1"]:
+        return self.cross_covariance(params, x, y)
+
+    #
+    def cross_covariance(self, params: Dict, x, y) -> Float[Array, "1"]:
+        x = self.slice_input(x)
+        y = self.slice_input(y)
+        n_x = x.shape[0]
+        n_y = y.shape[0]
+        x_mat = jnp.tile(jnp.squeeze(x), (n_y, 1))
+        y_mat = jnp.tile(jnp.squeeze(y), (n_x, 1)).T    
+        diff = x_mat - y_mat    
+        return jnp.squeeze(params['variance'] * -1.0*diff*jnp.tanh(diff / params['lengthscale'])).T
+
+    #
+    def init_params(self, key: Array) -> dict:
+        params = {       
+            "lengthscale": jnp.array([1.0] * self.ndims),
+            "variance": jnp.array([1.0])
+        }
+        return jax.tree_util.tree_map(lambda x: jnp.atleast_1d(x), params)
+
+    #
