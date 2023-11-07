@@ -81,6 +81,8 @@ class BayesianModel(ABC):
                     states:
                         The MCMC states (including burn-in states).
 
+            TODO: Feedback: move each mode into own function to enable selective overloading by child classes.
+
         """
         if sampling_parameters is None:
             sampling_parameters = dict()
@@ -91,6 +93,7 @@ class BayesianModel(ABC):
             if mode == 'gibbs-in-smc':
                 mcmc_step_fn = self.gibbs_fn
                 mcmc_init_fn = self.smc_init_fn
+
             elif mode == 'mcmc-in-smc':
                 kernel_type = sampling_parameters.get('kernel')
                 kernel_parameters = sampling_parameters.get('kernel_parameters')
@@ -102,22 +105,33 @@ class BayesianModel(ABC):
                 loglikelihood_fn=self.loglikelihood_fn(),
                 mcmc_step_fn=mcmc_step_fn,
                 mcmc_init_fn=mcmc_init_fn,
-                mcmc_parameters=sampling_parameters.get('mcmc_parameters', dict()),
+                mcmc_parameters=sampling_parameters.get(
+                    'mcmc_parameters', dict()),
                 resampling_fn=resampling.systematic,
                 target_ess=sampling_parameters.get('target_ess', 0.5),
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)
             )
             num_particles = sampling_parameters.get('num_particles', 1_000)
-            initial_particles = self.init_fn(key_init,
-                                             num_particles=num_particles)
+            print('bayesianmodels.py call init')
+            initial_particles = self.init_fn(
+                key_init,
+                num_particles=num_particles)
             initial_smc_state = smc.init(initial_particles.position)
-            num_iter, particles, marginal_likelihood = smc_inference_loop(key_inference,
-                                                                          smc.step,
-                                                                          initial_smc_state)
+            num_iter, particles, marginal_likelihood = smc_inference_loop(
+                key_inference, 
+                smc.step,
+                initial_smc_state)
             self.particles = particles
             self.marginal_likelihood = marginal_likelihood
+
             return particles, num_iter, marginal_likelihood
+        
         elif mode == 'gibbs' or mode == 'mcmc':
+            # NOTE: Feedback: use consistent naming and print warning
+            #   - Warn when defaults are used due to missing parameters
+            #   - SMC uses 'num_mcmc_steps', which I like better
+            # NOTE: Feedback: `num_burn` and `num_samples` are only added,
+            #   thus one of them is superflous
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
 
@@ -139,8 +153,10 @@ class BayesianModel(ABC):
                                     step_fn,
                                     initial_state,
                                     num_burn + num_samples)
+            
             self.states = states #if mode == 'gibbs' else states.position
-            return states
+            return initial_state, states  # NOTE: MOD: return inital state alongside all other states.
+        
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 

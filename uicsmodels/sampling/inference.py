@@ -1,6 +1,7 @@
 import jax
 import blackjax
 import jax.numpy as jnp
+from jax_tqdm import scan_tqdm
 
 from jax import Array
 from jax.typing import ArrayLike
@@ -74,6 +75,7 @@ def inference_loop(rng_key: PRNGKey, kernel: Callable, initial_state, num_sample
         GibbsState [List, "num_samples"]
 
     """
+    # @scan_tqdm(num_samples)  # NOTE: Tried to add jax-tqdm, but it might be buggy.
     @jax.jit
     def one_step(state, rng_key):
         state, info = kernel(rng_key, state)

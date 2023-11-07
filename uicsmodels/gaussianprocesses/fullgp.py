@@ -148,7 +148,8 @@ class FullLatentGPModel(FullGPModel):
             GibbsState
 
         """
-
+        print('full-gp init')
+        
         initial_state = super().init_fn(key, num_particles)
         initial_position = initial_state.position
 
@@ -157,16 +158,21 @@ class FullLatentGPModel(FullGPModel):
 
         if num_particles > 1:
             keys = jrnd.split(key, num_particles)                
-            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(key=key_, 
-                                                                                mean_params=mean_params_,
-                                                                                cov_params=cov_params_,
-                                                                                mean_fn=self.mean_fn,
-                                                                                cov_fn=self.cov_fn, 
-                                                                                x=self.X)
-            initial_position['f'] = jax.vmap(sample_fun,
-                                                in_axes=(0,
-                                                        {k: 0 for k in mean_params},
-                                                        {k: 0 for k in cov_params}))(keys, mean_params, cov_params)
+            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(
+                key=key_, 
+                mean_params=mean_params_, 
+                cov_params=cov_params_, 
+                mean_fn=self.mean_fn, 
+                cov_fn=self.cov_fn, 
+                x=self.X)
+
+            initial_position['f'] = jax.vmap(
+                sample_fun, 
+                in_axes=(
+                    0,
+                    {k: 0 for k in mean_params},
+                    {k: 0 for k in cov_params}))
+            (keys, mean_params, cov_params)
         else:
             key, subkey = jrnd.split(key)
             initial_position['f'] = sample_prior(subkey, self.mean_fn, 
@@ -176,6 +182,7 @@ class FullLatentGPModel(FullGPModel):
         return GibbsState(initial_position)
 
         #
+
 
     def gibbs_fn(self, key, state, loglik_fn__, temperature=1.0, **mcmc_parameters):
         """The Gibbs MCMC kernel.
@@ -237,7 +244,6 @@ class FullLatentGPModel(FullGPModel):
                                        hyperpriors=self.param_priors['kernel'])
             for param, val in sub_state.items():
                 position[param] = val
-            
         #
 
         if len(cov_params):
