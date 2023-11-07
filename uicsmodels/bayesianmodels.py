@@ -112,11 +112,12 @@ class BayesianModel(ABC):
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)
             )
             num_particles = sampling_parameters.get('num_particles', 1_000)
-            print('bayesianmodels.py call init')
+
             initial_particles = self.init_fn(
                 key_init,
                 num_particles=num_particles)
             initial_smc_state = smc.init(initial_particles.position)
+
             num_iter, particles, marginal_likelihood = smc_inference_loop(
                 key_inference, 
                 smc.step,
@@ -124,7 +125,7 @@ class BayesianModel(ABC):
             self.particles = particles
             self.marginal_likelihood = marginal_likelihood
 
-            return particles, num_iter, marginal_likelihood
+            return initial_particles, particles, num_iter, marginal_likelihood # NOTE: MOD: Return inital_particles 
         
         elif mode == 'gibbs' or mode == 'mcmc':
             # NOTE: Feedback: use consistent naming and print warning

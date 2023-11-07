@@ -351,14 +351,16 @@ class FullLatentGPModel(FullGPModel):
         mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
         cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
 
-        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
-                                                                            mean_params=mean_params, 
-                                                                            cov_params=cov_params, 
-                                                                            mean_fn=self.mean_fn,
-                                                                            cov_fn=self.cov_fn, 
-                                                                            x=self.X, 
-                                                                            z=x_pred, 
-                                                                            target=target)
+        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(
+            key, 
+            mean_params=mean_params, 
+            cov_params=cov_params, 
+            mean_fn=self.mean_fn,
+            cov_fn=self.cov_fn, 
+            x=self.X, 
+            z=x_pred, 
+            target=target)
+
         keys = jrnd.split(key, num_particles)
         target_pred = jax.vmap(jax.jit(sample_fun), 
                         in_axes=(0, 

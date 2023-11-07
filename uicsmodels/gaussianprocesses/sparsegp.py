@@ -221,7 +221,6 @@ class SparseGPModel(FullGPModel):
         initial_position['u'] = samples_u
         initial_position['f'] = samples_f
         
-        print('return gibbs state')
         return GibbsState(initial_position)
 
         #
@@ -244,7 +243,7 @@ class SparseGPModel(FullGPModel):
 
         """
     
-    # get current hypter-parameters from gibbs-state
+        # get current hypter-parameters from gibbs-state
         position = state.position.copy()
 
         likelihood_params = self.__get_component_parameters(position, 'likelihood')
@@ -256,7 +255,7 @@ class SparseGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-    # compute new mean and covariance matrix of sparse latent GP
+        # compute new mean and covariance matrix of sparse latent GP
         mean, cov = self._compute_sparse_gp(
                     cov_params=cov_params, 
                     x=self.X,
@@ -274,9 +273,9 @@ class SparseGPModel(FullGPModel):
             loglikelihood_fn_, 
             mean, cov)
 
-    # update cov parameters 
+        # update cov parameters 
         # if len(cov_params):  # theta
-        if False:  # HACK: Deactivated cov update
+        if True:  # HACK: Deactivated cov update
             """Sample parameters of the kernel function using: 
 
             p(theta | u, Z, f, X) \propto 
@@ -349,7 +348,7 @@ class SparseGPModel(FullGPModel):
                 position[param] = val
         #
 
-    # update likelihood
+        # update likelihood
         if False:
         # if len(likelihood_params):  # not specifed in Rossi # TODO: 'deactived' for now, need to adapt update function first.
             """Sample parameters of the likelihood using: 
@@ -373,7 +372,7 @@ class SparseGPModel(FullGPModel):
                 position[param] = val
         #
 
-    # update Z  # HACK: Deactivated Z
+        # update Z  # HACK: Deactivated Z
         if False:
             Z_params = self.__get_component_parameters(
                 position, 
@@ -444,7 +443,7 @@ class SparseGPModel(FullGPModel):
             for param, val in sub_state.items():  # HACk: deactivated Z
                 position[param] = val
 
-    # update u  # HACK: Deactivated u
+        # update u  # HACK: Deactivated u
         if False:
             # get updated cov. parameters theta
             cov_params = self.__get_component_parameters(position, 'kernel')
