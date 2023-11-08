@@ -94,9 +94,13 @@ class Brownian(jk.base.AbstractKernel):
 
 class SpectralMixture(jk.base.AbstractKernel):
 
-    def __init__(self) -> None:
+    def __init__(self, 
+                 active_dims: Optional[List[int]] = None, 
+                 name: Optional[str] = 'Spectral mixture') -> None:
         # Note: we don't want to inherit here.
-        self.name = 'Spectral mixture'
+        self.name = name
+        self._stationary = True
+        self.active_dims = active_dims
         
     #
     def __call__(
@@ -118,6 +122,7 @@ class SpectralMixture(jk.base.AbstractKernel):
         -------
         D : array, (n_samples, n_samples)
         """
+        
         XX = jnp.einsum('ij,ij->i', X, X)[:, jnp.newaxis]
         YY = jnp.einsum('ij,ij->i', Y, Y)
         XY = 2 * jnp.dot(X, Y.T)
@@ -164,8 +169,8 @@ class SpectralMixture(jk.base.AbstractKernel):
             return res, el
 
         #
-        x = self.slice_input(x)
-        y = self.slice_input(y)
+        # x = self.slice_input(x)
+        # y = self.slice_input(y)
         
         tau = jnp.sqrt(self.__euclidean_distance_einsum(x, y))
         beta = params['beta']

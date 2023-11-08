@@ -33,7 +33,6 @@ class FullGPModel(BayesianModel):
                  priors: Dict = None):
         if jnp.ndim(X) == 1:
             X = X[:, jnp.newaxis]
-
         # Validate arguments
         if X.shape[0] != len(y):
             raise ValueError(
@@ -540,7 +539,7 @@ class FullMarginalGPModel(FullGPModel):
             priors_flat, _ = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
             values_flat, _ = tree_flatten(position)
             for value, dist in zip(values_flat, priors_flat):
-                logprob += dist.log_prob(value)
+                logprob += jnp.sum(dist.log_prob(value))
             return logprob
 
         #

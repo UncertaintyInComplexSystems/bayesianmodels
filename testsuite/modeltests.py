@@ -143,10 +143,10 @@ def test_gwp(seed=42, show_latents=False):
     print('Set up models')
     m = int(d*(d+1)/2)
 
-    priors = dict(kernel=[dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
+    priors = dict(kernel=[dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
                                                                     scale=1.),
                                                             tfb.Exp())),
-                        dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
+                        dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
                                                                     scale=1.),
                                                             tfb.Exp()),
                             period=dx.Uniform(0.0, 1.0))],
@@ -319,9 +319,9 @@ def test_smk(seed=42):
 
     priors = dict(kernel=dict(beta=dx.Normal(loc=jnp.zeros((Q-1, )),
                                             scale=jnp.ones((Q-1, ))),
-                            mu=dx.Normal(loc=jnp.zeros((Q, )),
+                              mu=dx.Normal(loc=jnp.zeros((Q, )),
                                         scale=jnp.ones((Q, ))),
-                            nu=dx.Transformed(dx.Normal(loc=jnp.zeros((Q, )),
+                              nu=dx.Transformed(dx.Normal(loc=jnp.zeros((Q, )),
                                                         scale=jnp.ones((Q, ))),
                                                 tfb.Exp())),
                 likelihood=dict(obs_noise=dx.Transformed(dx.Normal(loc=0.,
@@ -338,14 +338,14 @@ def test_smk(seed=42):
                                            sampling_parameters=dict(num_particles=num_particles,
                                                                     num_mcmc_steps=num_mcmc_steps))
 
-    w = jax.vmap(centered_softmax, in_axes=0)(smk_particles.particles['beta'])
+    w = jax.vmap(centered_softmax, in_axes=0)(smk_particles.particles['kernel']['beta'])
     _, axes = plt.subplots(nrows=3, ncols=Q, figsize=(12, 9), constrained_layout=True)
     for q in range(Q):
-        axes[0, q].hist(jnp.abs(smk_particles.particles['mu'][:,q]) * (2*jnp.pi), 
+        axes[0, q].hist(jnp.abs(smk_particles.particles['kernel']['mu'][:,q]) * (2*jnp.pi), 
                  density=True, bins=30, alpha=0.5)
         axes[0, q].set_title(r'$\mu_{:d}$'.format(q+1))
         axes[0, q].set_xlabel(r'$\omega$')
-        axes[1, q].hist(smk_particles.particles['nu'][:,q], 
+        axes[1, q].hist(smk_particles.particles['kernel']['nu'][:,q], 
                  density=True, bins=30, alpha=0.5)
         axes[1, q].set_title(r'$\nu_{:d}$'.format(q+1))
         axes[1, q].set_xlabel(r'$\omega$')
@@ -378,9 +378,7 @@ def test_smk(seed=42):
     ax.set_title('Extrapolation')
     ax.set_xlabel(r'$x$')
     ax.set_ylabel(r'$y$')
-   
-    # plot_dist(ax, x_pred, y_pred, color='tab:red')
-    
+       
     return smk_particles
 
 #

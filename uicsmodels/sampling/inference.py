@@ -8,6 +8,7 @@ from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
 from jax.tree_util import tree_flatten
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
+from numpy import var
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 

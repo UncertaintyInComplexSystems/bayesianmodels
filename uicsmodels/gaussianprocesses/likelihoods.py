@@ -97,12 +97,14 @@ class Wishart(AbstractLikelihood):
         return f
 
     #
-    def likelihood(self, params, f):
-        if jnp.ndim(f):
-            f = jnp.reshape(f, (-1, self.nu, self.d))
-        L_vec = params['L_vec']
-        L = vec2tril(L_vec, self.d)
-        Sigma = construct_wishart(F=f, L=L)
+    def likelihood(self, params, f=None, Sigma=None):
+        assert f is not None or Sigma is not None, 'Provide either f or Sigma'
+        if Sigma is None:
+            if jnp.ndim(f):
+                f = jnp.reshape(f, (-1, self.nu, self.d))
+            L_vec = params['L_vec']
+            L = vec2tril(L_vec, self.d)
+            Sigma = construct_wishart(F=f, L=L)
         mean = params.get('likelihood.mean', jnp.zeros((self.d, )))
         return dx.MultivariateNormalFullCovariance(loc=mean,
                                                    covariance_matrix=Sigma)

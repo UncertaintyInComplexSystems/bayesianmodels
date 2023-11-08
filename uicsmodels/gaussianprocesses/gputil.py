@@ -185,7 +185,7 @@ def update_gaussian_process_cov_params(key: PRNGKey,
         log_pdf = 0        
         values_flat, _ = tree_flatten(cov_params_)
         for value, dist in zip(values_flat, priors_flat):
-            log_pdf += dist.log_prob(value)
+            log_pdf += jnp.sum(dist.log_prob(value))
         
         cov_ = cov_fn.cross_covariance(params=cov_params_, x=X, y=X) + jitter * jnp.eye(n)
         if jnp.ndim(f) == 1:
