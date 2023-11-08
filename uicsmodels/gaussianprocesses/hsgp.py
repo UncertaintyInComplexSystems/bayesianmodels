@@ -10,6 +10,12 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
 
+from jax.tree_util import tree_flatten, tree_unflatten
+
+from distrax._src.distributions.distribution import Distribution
+from distrax._src.bijectors.bijector import Bijector
+
+
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.bayesianmodels import GibbsState, BayesianModel
@@ -38,40 +44,39 @@ class FullLatentHSGPModel(BayesianModel):
         self.likelihood = likelihood
 
     #
-    def get_component_parameters(self, position, component):
-        """Extract parameter sampled values per model component for current
-        position.
+    # def get_component_parameters(self, position, component):
+    #     """Extract parameter sampled values per model component for current
+    #     position.
 
-        """
-        if component.startswith('kernel_'):
-            return {param: position[f'{component}.{param}'] for param in
-                self.param_priors[component]} if component in self.param_priors else {}
-        if component.startswith('mean_'):
-            return {param: position[f'{component}.{param}'] for param in
-                self.param_priors[component]} if component in self.param_priors else {}
-        return {param: position[param] for param in
-                self.param_priors[component]} if component in self.param_priors else {}
+    #     """
+    #     if component.startswith('kernel_'):
+    #         return {param: position[f'{component}.{param}'] for param in
+    #             self.param_priors[component]} if component in self.param_priors else {}
+    #     if component.startswith('mean_'):
+    #         return {param: position[f'{component}.{param}'] for param in
+    #             self.param_priors[component]} if component in self.param_priors else {}
+    #     return {param: position[param] for param in
+    #             self.param_priors[component]} if component in self.param_priors else {}
 
-    #
+    # #
     def init_fn(self, key: PRNGKey, num_particles=1):
         
         initial_position = dict()
 
-        # sample from all priors
-        for component, comp_priors in self.param_priors.items():
-            for param, param_dist in comp_priors.items():
-                key, subkey = jrnd.split(key)
-                param_name = f'{component}.{param}'
-                if num_particles > 1:
-                    initial_position[param_name] = param_dist.sample(seed=subkey,
-                                                                     sample_shape=(num_particles,))
-                else:
-                    initial_position[param_name] = param_dist.sample(seed=subkey)
+        priors_flat, priors_treedef = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
+        samples = list()
+        for prior in priors_flat:
+            key, subkey = jrnd.split(key)
+            samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
+
+        initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples) 
 
         # sample latent gps
         for name in ['v', 'f']:
-            mean_params = {param: initial_position[f'mean_{name}.{param}'] for param in self.param_priors.get(f'mean_{name}', {})}
-            cov_params = {param: initial_position[f'kernel_{name}.{param}'] for param in self.param_priors[f'kernel_{name}']}
+            mean_params = initial_position[name].get('mean', {})
+            cov_params = initial_position[name].get('kernel', {})
+            mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+            cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
 
             if num_particles > 1:
                 keys = jrnd.split(key, num_particles)                
@@ -81,13 +86,13 @@ class FullLatentHSGPModel(BayesianModel):
                                                                                   mean_fn=self.mean_fns[name],
                                                                                   cov_fn=self.cov_fns[name], 
                                                                                   x=self.X)
-                initial_position[name] = jax.vmap(sample_fun,
+                initial_position[name]['gp'] = jax.vmap(sample_fun,
                                                   in_axes=(0,
-                                                           {k: 0 for k in mean_params},
-                                                           {k: 0 for k in cov_params}))(keys, mean_params, cov_params)
+                                                           mean_param_in_axes,
+                                                           cov_param_in_axes))(keys, mean_params, cov_params)
             else:
                 key, subkey = jrnd.split(key)
-                initial_position[name] = sample_prior(subkey, self.mean_fns[name], 
+                initial_position[name]['gp'] = sample_prior(subkey, self.mean_fns[name], 
                                                        self.cov_fns[name], mean_params, 
                                                        cov_params, self.X)
 
@@ -99,15 +104,14 @@ class FullLatentHSGPModel(BayesianModel):
 
 
         """
-        position = state.position.copy()
-        
+        position = state.position.copy()        
         def loglikelihood_fn_v_(v_):
             return temperature * jnp.sum(jnp.array([self.likelihood.log_prob(params=dict(obs_noise=jnp.sqrt(jnp.exp(v_[i]))),
-                                                                             f=position['f'][i],
+                                                                             f=position['f']['gp'][i],
                                                                              y=self.y[i]) for i in range(self.n)]))
         
         def loglikelihood_fn_f_(f_):
-            return temperature * jnp.sum(jnp.array([self.likelihood.log_prob(params=dict(obs_noise=jnp.sqrt(jnp.exp(position['v'][i]))),
+            return temperature * jnp.sum(jnp.array([self.likelihood.log_prob(params=dict(obs_noise=jnp.sqrt(jnp.exp(position['v']['gp'][i]))),
                                                                              f=f_[i],
                                                                              y=self.y[i]) for i in range(self.n)]))  
 
@@ -115,12 +119,12 @@ class FullLatentHSGPModel(BayesianModel):
 
         # Sequentially update v and f and their respective covariance parameters
         for name in ['v', 'f']:   
-            mean_params = self.get_component_parameters(position, f'mean_{name}')
-            cov_params = self.get_component_parameters(position, f'kernel_{name}')
+            mean_params = position[name].get('mean', {})
+            cov_params = position[name].get('kernel', {})
 
             key, subkey = jrnd.split(key)
-            position[name], v_info = update_gaussian_process(subkey,
-                                                            position[name],
+            position[name]['gp'], gp_info = update_gaussian_process(subkey,
+                                                            position[name]['gp'],
                                                             loglikelihood_fns[name],
                                                             self.X,
                                                             mean_fn=self.mean_fns[name],
@@ -132,32 +136,29 @@ class FullLatentHSGPModel(BayesianModel):
             if len(cov_params):
                 key, subkey = jrnd.split(key)
                 sub_state, sub_info = update_gaussian_process_cov_params(subkey,
-                                                                        self.X,
-                                                                        position[name],
-                                                                        mean_fn=self.mean_fns[name],
-                                                                        cov_fn=self.cov_fns[name],
-                                                                        mean_params=mean_params,
-                                                                        cov_params=cov_params,
-                                                                        hyperpriors=self.param_priors[f'kernel_{name}'])
-
-                for param, val in sub_state.items():
-                    position[f'kernel_{name}.{param}'] = val
+                                                                         self.X,
+                                                                         position[name]['gp'],
+                                                                         mean_fn=self.mean_fns[name],
+                                                                         cov_fn=self.cov_fns[name],
+                                                                         mean_params=mean_params,
+                                                                         cov_params=cov_params,
+                                                                         hyperpriors=self.param_priors[name]['kernel'])
+                position[name]['kernel'] = sub_state
 
             #
             if len(mean_params):
-                cov_params = self.get_component_parameters(position, f'kernel_{name}')
+                cov_params = position[name].get('kernel', {})
                 key, subkey = jrnd.split(key)
                 sub_state, sub_info = update_gaussian_process_mean_params(subkey,
                                                                         self.X,
-                                                                        position[name],
+                                                                        position[name]['gp'],
                                                                         mean_fn=self.mean_fns[name],
                                                                         cov_fn=self.cov_fns[name],
                                                                         mean_params=mean_params,
                                                                         cov_params=cov_params,
                                                                         hyperpriors=self.param_priors[f'mean_{name}'])
 
-                for param, val in sub_state.items():
-                    position[f'mean_{name}.{param}'] = val
+                position[name]['mean'] = sub_state
 
             #
         #
@@ -183,7 +184,7 @@ class FullLatentHSGPModel(BayesianModel):
 
             """
             position = getattr(state, 'position', state)
-            f, v = position['f'], position['v']
+            f, v = position['f']['gp'], position['v']['gp']
             return jnp.sum(jnp.array([self.likelihood.log_prob(params=dict(obs_noise=jnp.sqrt(jnp.exp(v[i]))), f=f[i], y=self.y[i]) for i in range(self.n)]))
 
         #
@@ -201,16 +202,15 @@ class FullLatentHSGPModel(BayesianModel):
 
             for name in ['f', 'v']:
                 mu = self.mean_fns[name]
-                kernel = self.cov_fns[name]
-                psi = {param: position[param] for param in self.param_priors[f'mean_{name}']} if f'mean_{name}' in self.param_priors else {}
-                mean = mu.mean(params=psi, x=self.X).flatten()  # this will break with multitask GPs
-                theta = {param: position[param] for param in
-                     self.param_priors[f'kernel_{name}']} if f'kernel_{name}' in self.param_priors else {}
+                kernel = self.cov_fns[name]                
+                mean_params = position[name].get('mean', {})
+                mean = mu.mean(params=mean_params, x=self.X).flatten()  # this will break with multitask GPs
+                theta = position[name]['kernel']
                 cov = kernel.cross_covariance(params=theta,
                                                    x=self.X,
                                                    y=self.X)
 
-                logprob += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position[name])
+                logprob += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position[name]['gp'])
 
         #
         return logprior_fn_
@@ -218,11 +218,13 @@ class FullLatentHSGPModel(BayesianModel):
     #
     def __predict_latent(self, key: PRNGKey, x_pred: Array, latent):
 
-        num_particles = self.get_monte_carlo_samples()[latent].shape[0]
+        num_particles = self.get_monte_carlo_samples()[latent]['gp'].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        mean_params = {param: self.get_monte_carlo_samples()[f'mean_{latent}.{param}'] for param in self.param_priors.get(f'mean_{latent}', {})}
-        cov_params = {param: self.get_monte_carlo_samples()[f'kernel_{latent}.{param}'] for param in self.param_priors[f'kernel_{latent}']}
+        mean_params = self.get_monte_carlo_samples()[latent].get('mean', {})
+        cov_params = self.get_monte_carlo_samples()[latent]['kernel']
+        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
 
         sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
                                                                             mean_params=mean_params, 
@@ -235,12 +237,12 @@ class FullLatentHSGPModel(BayesianModel):
         keys = jrnd.split(key, num_particles)
         target_pred = jax.vmap(jax.jit(sample_fun), 
                         in_axes=(0, 
-                        {k: 0 for k in mean_params}, 
-                            {k: 0 for k in cov_params}, 
+                        mean_param_in_axes, 
+                            cov_param_in_axes, 
                                 0))(keys, 
                                     mean_params, 
                                     cov_params, 
-                                    self.get_monte_carlo_samples()[latent])
+                                    self.get_monte_carlo_samples()[latent]['gp'])
 
         return target_pred
     
@@ -266,7 +268,7 @@ class FullLatentHSGPModel(BayesianModel):
         key, key_f, key_v, key_y = jrnd.split(key, 4)
         f_pred = self.predict_f(key_f, x_pred)
         v_pred = jnp.sqrt(jnp.exp(self.predict_v(key_v, x_pred)))
-        num_particles = self.get_monte_carlo_samples()['f'].shape[0]
+        num_particles = self.get_monte_carlo_samples()['f']['gp'].shape[0]
         keys_y = jrnd.split(key_y, num_particles)
         y_pred = jax.vmap(forward, in_axes=(0, 0, 0))(keys_y, f_pred, v_pred)
         return y_pred

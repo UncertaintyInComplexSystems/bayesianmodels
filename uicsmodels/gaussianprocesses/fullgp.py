@@ -9,6 +9,10 @@ from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
+from jax.tree_util import tree_flatten, tree_unflatten
+
+from distrax._src.distributions.distribution import Distribution
+from distrax._src.bijectors.bijector import Bijector
 
 import jax
 import distrax as dx
@@ -52,33 +56,32 @@ class FullGPModel(BayesianModel):
         raise NotImplementedError
 
     #
-    def init_fn(self, key: PRNGKey, num_particles: int =1):
+    def init_fn(self, key: Array, num_particles: int = 1):
         """Initial state for MCMC/SMC.
 
         This function initializes all highest level latent variables. Children
-        of this class need to implement initialization of intermediate latent 
-        variables according to the structure of the hierarchical model. 
+        of this class need to implement initialization of intermediate latent
+        variables according to the structure of the hierarchical model.
 
         Args:
             key: PRNGKey
             num_particles: int
                 Number of particles to initialize a state for
         Returns:
-            GibbsState                
+            GibbsState
 
         """
 
-        initial_position = dict()
-        for component, comp_priors in self.param_priors.items():
-            for param, param_dist in comp_priors.items():
-                key, subkey = jrnd.split(key)
-                if num_particles > 1:
-                    initial_position[param] = param_dist.sample(seed=subkey, sample_shape=(num_particles,))
-                else:
-                    initial_position[param] = param_dist.sample(seed=subkey)
+        priors_flat, priors_treedef = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
+        samples = list()
+        for prior in priors_flat:
+            key, subkey = jrnd.split(key)
+            samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
+
+        initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples)
         return GibbsState(position=initial_position)
 
-    # 
+    #
     def gibbs_fn(self, key: PRNGKey, state: GibbsState, **kwars):
         raise NotImplementedError
     
@@ -134,23 +137,6 @@ class FullLatentGPModel(FullGPModel):
         super().__init__(X, y, cov_fn, mean_fn, priors)      
 
     #
-    def __get_component_parameters(self, position: Dict, component: str):
-        """Extract parameter sampled values per model component for current
-        position.
-
-        Args:
-            position: Dict
-                Contains assigned values for current sample/state
-            component: String
-                The component of the hierarchical model to extract parameters for
-        Returns:
-            Dict: containing a subset of the items in `position`
-
-        """
-        return {param: position[param] for param in
-                self.param_priors[component]} if component in self.param_priors else {}
-
-    #   
     def init_fn(self, key, num_particles=1):
         """Initialization of the Gibbs state.
 
@@ -174,8 +160,10 @@ class FullLatentGPModel(FullGPModel):
         initial_state = super().init_fn(key, num_particles)
         initial_position = initial_state.position
 
-        mean_params = {param: initial_position[param] for param in self.param_priors.get(f'mean', {})}
-        cov_params = {param: initial_position[param] for param in self.param_priors[f'kernel']}
+        mean_params = initial_position.get('mean', {})
+        cov_params = initial_position.get('kernel', {})
+        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
 
         if num_particles > 1:
             keys = jrnd.split(key, num_particles)                
@@ -187,13 +175,16 @@ class FullLatentGPModel(FullGPModel):
                                                                                 x=self.X)
             initial_position['f'] = jax.vmap(sample_fun,
                                              in_axes=(0,
-                                                      {k: 0 for k in mean_params},
-                                                      {k: 0 for k in cov_params}))(keys, mean_params, cov_params)
+                                                      mean_param_in_axes,
+                                                      cov_param_in_axes))(keys, mean_params, cov_params)
         else:
             key, subkey = jrnd.split(key)
-            initial_position['f'] = sample_prior(subkey, self.mean_fn, 
-                                                    self.cov_fn, mean_params, 
-                                                    cov_params, self.X)
+            initial_position['f'] = sample_prior(subkey, 
+                                                 self.mean_fn, 
+                                                 self.cov_fn, 
+                                                 mean_params, 
+                                                 cov_params, 
+                                                 self.X)
 
         return GibbsState(initial_position)
 
@@ -226,12 +217,11 @@ class FullLatentGPModel(FullGPModel):
         # Sample the latent GP using:   
         # p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
-        likelihood_params = self.__get_component_parameters(position, 'likelihood')
+        likelihood_params = position.get('likelihood', {})
+        mean_params = position.get('mean', {}) 
+        cov_params = position.get('kernel', {}) 
+
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
-
-        mean_params = self.__get_component_parameters(position, 'mean')
-
-        cov_params = self.__get_component_parameters(position, 'kernel')
 
         key, subkey = jrnd.split(key)
         position['f'], f_info = update_gaussian_process(subkey,
@@ -245,7 +235,8 @@ class FullLatentGPModel(FullGPModel):
 
         if len(mean_params):
             # Sample parameters of the mean function using: 
-            # p(psi | f, theta) \propto p(f | psi, theta)p(psi)            
+            # p(psi | f, theta) \propto p(f | psi, theta)p(psi)      
+
             key, subkey = jrnd.split(key)
             sub_state, sub_info = update_gaussian_process_mean_params(subkey, self.X,
                                        position['f'],
@@ -253,9 +244,8 @@ class FullLatentGPModel(FullGPModel):
                                        cov_fn=self.cov_fn,
                                        mean_params=mean_params,
                                        cov_params=cov_params,
-                                       hyperpriors=self.param_priors['kernel'])
-            for param, val in sub_state.items():
-                position[param] = val
+                                       hyperpriors=self.param_priors['mean'])
+            position['mean'] = sub_state
             
         #
 
@@ -271,8 +261,7 @@ class FullLatentGPModel(FullGPModel):
                                        mean_params=mean_params,
                                        cov_params=cov_params,
                                        hyperpriors=self.param_priors['kernel'])
-            for param, val in sub_state.items():
-                position[param] = val
+            position['kernel'] = sub_state
         #
 
         if len(likelihood_params):
@@ -286,13 +275,10 @@ class FullLatentGPModel(FullGPModel):
                                        likelihood=self.likelihood,
                                        obs_params=likelihood_params,
                                        hyperpriors=self.param_priors['likelihood'])
-
-            for param, val in sub_state.items():
-                position[param] = val
+            position['likelihood'] = sub_state
         
         #
-        return GibbsState(
-            position=position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
+        return GibbsState(position=position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
 
     #
     def loglikelihood_fn(self) -> Callable:
@@ -305,11 +291,10 @@ class FullLatentGPModel(FullGPModel):
             A function that computes the log-likelihood of the model given a
             state.
         """
+
         def loglikelihood_fn_(state: GibbsState) -> Float:
-            # position = state.position
             position = getattr(state, 'position', state)
-            phi = {param: position[param] for param in
-                   self.param_priors['likelihood']} if 'likelihood' in self.param_priors else {}
+            phi = state.get('likelihood', {})
             f = position['f']
             log_pdf = jnp.sum(self.likelihood.log_prob(params=phi, f=f, y=self.y))
             return log_pdf
@@ -325,6 +310,8 @@ class FullLatentGPModel(FullGPModel):
             None
         Returns:
             A function that computes the log-prior of the model given a state.
+
+        # todo: add 2D vmap
 
         """
 
@@ -380,8 +367,10 @@ class FullLatentGPModel(FullGPModel):
         num_particles = samples['f'].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
-        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
+        mean_params = samples.get('mean', {})
+        cov_params = samples.get('kernel', {})
+        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
 
         sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(key, 
                                                                             mean_params=mean_params, 
@@ -394,9 +383,9 @@ class FullLatentGPModel(FullGPModel):
         keys = jrnd.split(key, num_particles)
         target_pred = jax.vmap(jax.jit(sample_fun), 
                         in_axes=(0, 
-                        {k: 0 for k in mean_params}, 
-                            {k: 0 for k in cov_params}, 
-                                0))(keys, 
+                                 mean_param_in_axes, 
+                                 cov_param_in_axes, 
+                                 0))(keys, 
                                     mean_params, 
                                     cov_params, 
                                     samples['f'])
@@ -433,11 +422,12 @@ class FullLatentGPModel(FullGPModel):
         f_pred = self.predict_f(key_f, x_pred)        
         num_particles = samples['f'].shape[0]
         keys_y = jrnd.split(key_y, num_particles)
-        likelihood_params = {param: samples[param] for param in self.param_priors['likelihood']}
+        likelihood_params = samples.get('likelihood', {}) #{param: samples[param] for param in self.param_priors['likelihood']}
+        obs_param_in_axes = jax.tree_map(lambda l: 0, likelihood_params)
         y_pred = jax.vmap(jax.jit(forward), 
                           in_axes=(0, 
-                                    {k: 0 for k in likelihood_params}, 
-                                    0))(keys_y, 
+                                   obs_param_in_axes, 
+                                   0))(keys_y, 
                                     likelihood_params, 
                                     f_pred)
         return y_pred
@@ -502,8 +492,7 @@ class FullMarginalGPModel(FullGPModel):
         logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
         new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.01))
 
-        return GibbsState(
-            position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
+        return GibbsState(position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
 
     #
     def loglikelihood_fn(self) -> Callable:
@@ -521,10 +510,9 @@ class FullMarginalGPModel(FullGPModel):
         def loglikelihood_fn_(state: GibbsState) -> Float:
             position = getattr(state, 'position', state)
             psi = {param: position[param] for param in self.param_priors['mean']} if 'mean' in self.param_priors else {}
-            theta = {param: position[param] for param in
-                     self.param_priors['kernel']} if 'kernel' in self.param_priors else {}
-
-            sigma = state['obs_noise']
+            psi = state.get('mean', {})
+            theta = state['kernel']
+            sigma = state['likelihood']['obs_noise']
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
             cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
@@ -546,21 +534,20 @@ class FullMarginalGPModel(FullGPModel):
 
         """
 
-        def logprior_fn_(state: GibbsState) -> Float:
-            position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
+        def logprior_fn_(state: GibbsState):
+            position = getattr(state, 'position', state)
             logprob = 0
-            for component, params in self.param_priors.items():
-                # mean, kernel, likelihood
-                for param, dist in params.items():
-                    # parameters per component
-                    logprob += jnp.sum(dist.log_prob(position[param]))
+            priors_flat, _ = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
+            values_flat, _ = tree_flatten(position)
+            for value, dist in zip(values_flat, priors_flat):
+                logprob += dist.log_prob(value)
             return logprob
 
         #
         return logprior_fn_
 
     #
-    def predict_f(self, key: PRNGKey, x_pred: ArrayTree, num_subsample=-1):
+    def predict_f(self, key: Array, x_pred: ArrayTree, num_subsample=-1):
         """Predict the latent f on unseen pointsand
 
         This function takes the approximated posterior (either by MCMC or SMC)
@@ -583,45 +570,58 @@ class FullMarginalGPModel(FullGPModel):
         """
         if jnp.ndim(x_pred) == 1:
             x_pred = x_pred[:, jnp.newaxis]
-        
+
         samples = self.get_monte_carlo_samples()
-        num_particles = samples[list(samples.keys())[0]].shape[0]
+        flat_particles, _ = tree_flatten(samples)
+        num_particles = flat_particles[0].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
-        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
-
-        sample_fun = lambda key, mean_params_, cov_params_, obs_noise_: sample_predictive(key, 
-                                                                            mean_params=mean_params_, 
-                                                                            cov_params=cov_params_, 
+        mean_params = samples.get('mean', {})
+        cov_params = samples['kernel']
+        mean_params_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+        sample_fun = lambda key, mean_params_, cov_params_, obs_noise_: sample_predictive(key,
+                                                                            mean_params=mean_params_,
+                                                                            cov_params=cov_params_,
                                                                             mean_fn=self.mean_fn,
-                                                                            cov_fn=self.cov_fn, 
-                                                                            x=self.X, 
-                                                                            z=x_pred, 
+                                                                            cov_fn=self.cov_fn,
+                                                                            x=self.X,
+                                                                            z=x_pred,
                                                                             target=self.y,
                                                                             obs_noise=obs_noise_)
         keys = jrnd.split(key, num_particles)
-        target_pred = jax.vmap(jax.jit(sample_fun), 
-                        in_axes=(0, 
-                                {k: 0 for k in mean_params}, 
-                                {k: 0 for k in cov_params},
-                                0))(keys, 
-                                        mean_params, 
+        target_pred = jax.vmap(jax.jit(sample_fun),
+                        in_axes=(0,
+                                {k: 0 for k in mean_params},
+                                cov_param_in_axes,
+                                0))(keys,
+                                        mean_params,
                                         cov_params,
-                                        samples['obs_noise'])
+                                        samples['likelihood']['obs_noise'])
 
         return target_pred
 
     #
     def predict_y(self, key: PRNGKey, x_pred: Array):
-        # todo: make part of superclass
-        """Posterior predictive distribution p(y* | f*, x*)
+        """Samples from the posterior predictive distribution
+
+        Args:
+            key: PRNGKey
+            x_pred: Array
+                The test locatons
+        Returns:
+            Returns samples from the posterior predictive distribution:
+
+            y* \sim p(y* | X, y x*) = \int p(y* | f*)p(f* | f)p(f | X, y) df
 
         """
-        assert hasattr(self, 'particles'), 'No particles available'
-
         if jnp.ndim(x_pred) == 1:
             x_pred = x_pred[:, jnp.newaxis]
+
+        samples = self.get_monte_carlo_samples()
+        if samples is None:
+            raise AssertionError(
+                f'The posterior predictive distribution can only be called after training.')
 
         def forward(key, params, f):
             return self.likelihood.likelihood(params, f).sample(seed=key)
@@ -629,15 +629,15 @@ class FullMarginalGPModel(FullGPModel):
         #
         key, key_f, key_y = jrnd.split(key, 3)
         f_pred = self.predict_f(key_f, x_pred)
-        samples = self.get_monte_carlo_samples()
-        num_particles = samples[list(samples.keys())[0]].shape[0]
+        flat_particles, _ = tree_flatten(samples)
+        num_particles = flat_particles[0].shape[0]
         keys_y = jrnd.split(key_y, num_particles)
-        likelihood_params = {param: samples[param] for param in self.param_priors['likelihood']}
-        y_pred = jax.vmap(jax.jit(forward), 
-                          in_axes=(0, 
-                                    {k: 0 for k in likelihood_params}, 
-                                    0))(keys_y, 
-                                    likelihood_params, 
+        likelihood_params = samples['likelihood']
+        y_pred = jax.vmap(jax.jit(forward),
+                            in_axes=(0,
+                                    0,
+                                    0))(keys_y,
+                                    likelihood_params,
                                     f_pred)
         return y_pred
 

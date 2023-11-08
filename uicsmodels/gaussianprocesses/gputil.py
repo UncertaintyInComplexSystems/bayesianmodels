@@ -10,6 +10,10 @@ from uicsmodels.sampling.inference import update_correlated_gaussian, update_met
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
 
+from jax.tree_util import tree_flatten, tree_unflatten
+from distrax._src.distributions.distribution import Distribution
+from distrax._src.bijectors.bijector import Bijector
+
 jitter = 1e-6
 
 def plot_dist(ax, x, samples, **kwargs):
@@ -133,17 +137,6 @@ def sample_prior(key: PRNGKey,
     return f
 
 #
-# def update_gaussian_process(key: PRNGKey, f_current: Array, loglikelihood_fn: Callable, X: Array,
-#                             mean_fn: Callable = Zero(),
-#                             cov_fn: Callable = jk.RBF(),
-#                             mean_params: Dict = None,
-#                             cov_params: Dict = None):
-#     n = X.shape[0]
-#     mean = mean_fn.mean(params=mean_params, x=X)
-#     cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
-#     return update_correlated_gaussian(key, f_current, loglikelihood_fn, mean, cov)
-
-# #
 def update_gaussian_process(key: PRNGKey, f_current: Array, loglikelihood_fn: Callable, X: Array,
                             mean_fn: Callable = Zero(),
                             cov_fn: Callable = jk.RBF(),
@@ -186,10 +179,14 @@ def update_gaussian_process_cov_params(key: PRNGKey,
 
     n = X.shape[0]
     mu = mean_fn.mean(params=mean_params, x=X)
+    priors_flat, _ = tree_flatten(hyperpriors, lambda l: isinstance(l, (Distribution, Bijector)))
+
     def logdensity_fn_(cov_params_):
-        log_pdf = 0
-        for param, val in cov_params_.items():
-            log_pdf += jnp.sum(hyperpriors[param].log_prob(val))
+        log_pdf = 0        
+        values_flat, _ = tree_flatten(cov_params_)
+        for value, dist in zip(values_flat, priors_flat):
+            log_pdf += dist.log_prob(value)
+        
         cov_ = cov_fn.cross_covariance(params=cov_params_, x=X, y=X) + jitter * jnp.eye(n)
         if jnp.ndim(f) == 1:
             log_pdf += dx.MultivariateNormalFullCovariance(mu, cov_).log_prob(f)

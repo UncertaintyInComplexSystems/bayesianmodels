@@ -25,6 +25,8 @@ class DefaultingKernel(jk.base.AbstractKernel):
     def __init__(self, base_kernel, defaults: Dict) -> None:
         self.base_kernel = base_kernel
         self.defaults = defaults
+        self._stationary = base_kernel._stationary
+        self.name = 'Default ' + base_kernel.name
 
     #
     def __call__(
@@ -46,7 +48,6 @@ class DefaultingKernel(jk.base.AbstractKernel):
         Returns:
             an nxm matrix of cross covariances (n = len(x), m = len(y))
         """
-
         params = {**params, **self.defaults}
         K = self.base_kernel.cross_covariance(params, x, y)
         return K

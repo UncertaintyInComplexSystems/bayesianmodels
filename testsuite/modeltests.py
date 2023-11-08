@@ -17,9 +17,14 @@ tfb = tfp.bijectors
 
 from collections.abc import MutableMapping
 
-from uicsmodels.gaussianprocesses.gputil import sample_prior
+from jax.tree_util import tree_flatten, tree_unflatten, tree_flatten_with_path
+
+from distrax._src.distributions.distribution import Distribution
+from distrax._src.bijectors.bijector import Bijector
+
+from uicsmodels.gaussianprocesses.gputil import sample_prior, plot_dist
 from uicsmodels.gaussianprocesses.hsgp import FullLatentHSGPModel
-from uicsmodels.gaussianprocesses.kernels import Brownian, SpectralMixture, centered_softmax
+from uicsmodels.gaussianprocesses.kernels import Brownian, SpectralMixture, centered_softmax, DefaultingKernel
 from uicsmodels.gaussianprocesses.meanfunctions import Constant
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
 from uicsmodels.gaussianprocesses.likelihoods import Wishart, construct_wishart, tril2vec, construct_wishart_Lvec
@@ -27,16 +32,7 @@ from uicsmodels.gaussianprocesses.fullwp import FullLatentWishartModel
 
 #### PLOTTING
 
-def plot_dist(ax, x, samples, **kwargs):
-    f_mean = jnp.mean(samples, axis=0)
-    f_hdi_lower = jnp.percentile(samples, q=2.5, axis=0)
-    f_hdi_upper = jnp.percentile(samples, q=97.5, axis=0)
-    color = kwargs.get('color', 'tab:blue')
-    ax.plot(x, f_mean, lw=2, **kwargs)
-    ax.fill_between(x.flatten(), f_hdi_lower, f_hdi_upper,
-                    alpha=0.2, lw=0, color=color)
 
-#
 def plot_wishart(x, Sigma, add_title=False, **kwargs):
     n, d, _ = Sigma.shape
     _, axes = plt.subplots(nrows=d, ncols=d, sharex=True, sharey=True,
@@ -106,12 +102,15 @@ def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str ='.') -> Muta
 
 #### TEST CASES
 
-def test_gwp(seed=42):
-
-    key = jrnd.PRNGKey(seed)
+def test_gwp(seed=42, show_latents=False):
+    key = jrnd.PRNGKey(42)
     key, key_F, key_Y = jrnd.split(key, 3)
-    cov_fn = jk.RBF()
-    cov_params = dict(lengthscale=0.2, variance=1.0)
+
+    cov_fn = DefaultingKernel(jk.RBF(), dict(variance=1.0)) * DefaultingKernel(jk.Periodic(), dict(variance=1.0))
+
+    params_rbf = dict(lengthscale=2.0)  # ls: how much fluctation between periods
+    params_periodic = dict(period=0.3, lengthscale=0.5)  # ls: how much fluctuation within one period
+    cov_params = [params_rbf, params_periodic]
 
     n = 100
     d = 3
@@ -127,7 +126,7 @@ def test_gwp(seed=42):
 
     plt.figure()
     plot_wishart(x, Sigma_gt, add_title=True);
-    plt.suptitle('Ground truth Wishart process')
+    plt.suptitle('Ground truth Wishart process (RBF $\times$ Periodic)')
 
     print('Create observations')
     wishart_likelihood = Wishart(nu=nu, d=d)
@@ -145,13 +144,18 @@ def test_gwp(seed=42):
     print('Set up models')
     m = int(d*(d+1)/2)
 
-    priors = dict(kernel=dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
+    priors = dict(kernel=[dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
                                                                     scale=1.),
                                                             tfb.Exp())),
+                        dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
+                                                                    scale=1.),
+                                                            tfb.Exp()),
+                            period=dx.Uniform(0.0, 1.0))],
                     likelihood=dict(L_vec=dx.Normal(loc=jnp.zeros((m, )),
                                                     scale=jnp.ones((m, )))))
 
-    wp = FullLatentWishartModel(x, Y, cov_fn=jk.RBF(), priors=priors)
+    cov_fn = jk.RBF() * jk.Periodic()
+    wp = FullLatentWishartModel(x, Y, cov_fn=cov_fn, priors=priors)
 
     print('Do inference with SMC')
     key, subkey = jrnd.split(key)
@@ -159,10 +163,10 @@ def test_gwp(seed=42):
                                     mode='gibbs-in-smc',
                                     sampling_parameters=dict(num_particles=1000,
                                                             num_mcmc_steps=100))
-    
+
     def construct_wishart_samples(samples):
         F_samples = samples['f']
-        L_vec_samples = samples['L_vec']
+        L_vec_samples = samples['likelihood']['L_vec']
         return jax.vmap(construct_wishart_Lvec, in_axes=(0, 0))(F_samples,
                                                                 L_vec_samples)
 
@@ -186,16 +190,108 @@ def test_gwp(seed=42):
     _ = plot_wishart_dist(z, Sigma_pred, axes, add_title=True, color='tab:orange')
     plt.suptitle(r'Extrapolate the Wishart process to $x^* \neq x$')
 
-    sample_ix = 100
-    key, subkey = jrnd.split(key)
-    axes = plot_latents(x, samples['f'][sample_ix]);
-    f_pred = wp.predict_f(subkey, z)
-    plot_latents(z, f_pred[sample_ix], axes=axes);
-    plt.suptitle(r'Extrapolation of one sample $f$ (sanity check)')
+    if show_latents:
+        sample_ix = 100
+        key, subkey = jrnd.split(key)
+        axes = plot_latents(x, samples['f'][sample_ix]);
+        f_pred = wp.predict_f(subkey, z)
+        plot_latents(z, f_pred[sample_ix], axes=axes);
+        plt.suptitle(r'Extrapolation of one sample $f$ (sanity check)')
 
     return wp
 
 #
+def test_compound_kernel(seed=42):
+    key = jrnd.PRNGKey(42)
+
+    key, key_f, key_obs = jrnd.split(key, 3)
+    cov_fn = DefaultingKernel(jk.RBF(), dict(variance=1.0)) * DefaultingKernel(jk.Periodic(), dict(variance=1.0))
+
+    obs_noise_ = 0.2
+    params_rbf = dict(lengthscale=2.0)  # ls: how much fluctation between periods
+    params_periodic = dict(period=0.3, lengthscale=0.5)  # ls: how much fluctuation within one period
+    cov_params = [params_rbf, params_periodic]
+
+    gt = [2.0, 0.5, 0.3, 0.2]
+
+    n = 200
+    x = jnp.linspace(0, 1, n)[:, jnp.newaxis]
+
+    f_true = sample_prior(key_f, x, cov_params=cov_params, cov_fn=cov_fn)
+
+    y = f_true + obs_noise_*jrnd.normal(key_obs, shape=(n,))
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(x, f_true, 'k', label=r'$f$')
+    plt.plot(x, y, 'rx', label='obs')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.xlim([0., 1.])
+    plt.legend()
+    plt.title(r'Locally period kernel (RBF $\times$ Periodic)')
+    plt.show();    
+
+
+    priors = dict(kernel=[dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
+                                                                        scale=1.),
+                                                            tfb.Exp())),
+                            dict(lengthscale=dx.Transformed(dx.Normal(loc=-1.,
+                                                                        scale=1.),
+                                                            tfb.Exp()),
+                                period=dx.Uniform(0.0, 1.0))],
+                likelihood=dict(obs_noise=dx.Transformed(dx.Normal(loc=0.,
+                                                                    scale=1.),
+                                                        tfb.Exp())))
+
+
+    print('Inference')
+    gp = FullMarginalGPModel(x, y, cov_fn=cov_fn, priors=priors) 
+
+    num_particles = 1_000
+    num_mcmc_steps = 100
+
+    key, gpm_key = jrnd.split(key)
+    particles, _, lml = gp.inference(gpm_key,
+                                    mode='gibbs-in-smc',
+                                    sampling_parameters=dict(num_particles=num_particles,
+                                                            num_mcmc_steps=num_mcmc_steps))
+
+    flat_priors, _ = tree_flatten_with_path(priors, 
+                                        lambda l: isinstance(l, (Distribution, Bijector)))
+    M = len(flat_priors)
+
+    _, axes = plt.subplots(nrows=1, ncols=M, figsize=(12, 3), 
+                        constrained_layout=True)
+
+    flat_particles, _ = tree_flatten(particles)
+    for i, (keyleaf, part) in enumerate(zip(flat_priors, flat_particles)):
+
+        axes[i].hist(part, density=True, bins=30)
+        axes[i].axvline(x=gt[i], ls=':', c='k')
+
+    plt.suptitle('Marginal posteriors of hyperparameters')
+
+    x_pred = jnp.linspace(0, 2.0, num=200)
+    key, key_pred = jrnd.split(key)
+
+    plt.figure(figsize=(12, 4))
+    ax = plt.gca()
+    f_pred = gp.predict_f(key_pred, x_pred)     
+        
+    plot_dist(ax, x_pred, f_pred, color='tab:blue')
+
+    ax.plot(x, f_true, 'k', label=r'$f$')
+    ax.plot(x, y, 'rx', label='obs')
+    ax.axvline(x=1.0, ls=':', c='k')
+    ax.set_xlim([0, 1.5])
+    # ax.set_ylim([-2., 0.25])
+    ax.set_xlabel(r'$x$')
+    ax.set_title(r'Posterior predictive $f$')
+
+    return gp
+
+
+#                                                          
 def test_smk(seed=42):
     print('Generate data')
 
@@ -289,7 +385,7 @@ def test_smk(seed=42):
     return smk_particles
 
 #
-def test_hsgp(seed=42):
+def test_hsgp(seed=1234):
     print('Generate data')
     key = jrnd.PRNGKey(seed)
     key, key_v, key_f, key_y = jrnd.split(key, 4)
@@ -299,15 +395,21 @@ def test_hsgp(seed=42):
     n = 100
     x = jnp.linspace(2, 3, n)[:, jnp.newaxis]
 
-    ground_truth = {'kernel_v.lengthscale': 0.3, 'kernel_v.variance': 4.0,
-                    'kernel_f.variance': 10.0}
+    ground_truth = dict(v={'lengthscale': 0.3, 'variance': 4.0}, f={'variance': 10.0})
 
     kernel_v = jk.RBF()    
-    v = sample_prior(key_v, x=x, cov_fn=kernel_v, cov_params=dict(lengthscale=ground_truth['kernel_v.lengthscale'], variance=ground_truth['kernel_v.variance']))
+    v = sample_prior(key_v,
+                    x=x, 
+                    cov_fn=kernel_v, 
+                    cov_params=dict(lengthscale=ground_truth['v']['lengthscale'], 
+                                    variance=ground_truth['v']['variance']))
     V = jnp.exp(v)
 
     kernel_f = Brownian()
-    f = sample_prior(key_f, x=x, cov_fn=kernel_f, cov_params=dict(variance=ground_truth['kernel_v.variance']))
+    f = sample_prior(key_f, 
+                    x=x, 
+                    cov_fn=kernel_f, 
+                    cov_params=dict(variance=ground_truth['f']['variance']))
 
     y = f + jnp.sqrt(V)*jrnd.normal(key_y, shape=(n, ))
 
@@ -325,18 +427,19 @@ def test_hsgp(seed=42):
 
     print('Set up heteroskedastic GP model')
 
-    priors = dict(kernel_v=dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
-                                                                scale=1.),
-                                                        tfb.Exp()),
-                                variance=dx.Transformed(dx.Normal(loc=0.,
-                                                                scale=1.),
-                                                    tfb.Exp())),
-                kernel_f=dict(variance=dx.Transformed(dx.Normal(loc=0.,
-                                                                scale=1.),
-                                                        tfb.Exp())))
+    priors = dict(v=dict(kernel=dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
+                                                                        scale=1.),
+                                                                tfb.Exp()),
+                                    variance=dx.Transformed(dx.Normal(loc=0.,
+                                                                    scale=1.),
+                                                            tfb.Exp()))),
+                f=dict(kernel=dict(variance=dx.Transformed(dx.Normal(loc=0.,
+                                                                    scale=1.),
+                                                            tfb.Exp()))))
 
     hsgp = FullLatentHSGPModel(x, y,
-                            cov_fns=dict(v=jk.RBF(), f=Brownian()),
+                            cov_fns=dict(v=jk.RBF(), 
+                                            f=Brownian()),
                             priors=priors)
 
     print('Inference')
@@ -347,25 +450,26 @@ def test_hsgp(seed=42):
                             mode='gibbs-in-smc',
                             sampling_parameters=dict(num_particles=num_particles,
                                                     num_mcmc_steps=num_mcmc_steps))
-    
-    priors_flattened = flatten_dict(hsgp.param_priors)
 
-    M = len(priors_flattened)
-    _, axes = plt.subplots(nrows=1, ncols=M, figsize=(12, 3), constrained_layout=True)
-    symbols = {'kernel_v.lengthscale': r'\ell_v', 'kernel_v.variance': r'\tau_v', 'kernel_f.variance': r'\tau_f'}
+    _, axes = plt.subplots(nrows=1, ncols=3, figsize=(12, 3), constrained_layout=True)
+    symbols = dict(v={'lengthscale': r'\ell_v', 'variance':  r'\tau_v'},
+                    f={'variance': r'\tau_f'})
 
-    for i, (ax, param) in enumerate(zip(axes, priors_flattened.keys())):
-        ax.hist(hsgp.particles.particles[param], density=True, bins=30)
-        ax.axvline(x=ground_truth[param], ls='--', color='k')
-        ax.set_xlabel(r'${:s}$'.format(symbols[param]))
+    flat_priors = flatten_dict(priors)
+
+    for i, (ax, param_path) in enumerate(zip(axes, flat_priors.keys())):
+        path = param_path.split('.')    
+        ax.hist(results[0].particles[path[0]][path[1]][path[2]], density=True, bins=30)
+        ax.axvline(x=ground_truth[path[0]][path[2]], ls='--', color='k')
+        ax.set_xlabel(r'${:s}$'.format(symbols[path[0]][path[2]]))
 
     plt.suptitle('Marginal posteriors of hyperparameters')
 
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3), sharex=True,
                             constrained_layout=True)
 
-    v_samples = jnp.exp(results[0].particles['v'])
-    f_samples = results[0].particles['f']
+    v_samples = jnp.exp(results[0].particles['v']['gp'])
+    f_samples = results[0].particles['f']['gp']
 
     plot_dist(axes[0], x, v_samples)
     plot_dist(axes[1], x, f_samples)
@@ -389,8 +493,8 @@ def test_hsgp(seed=42):
 
     x_pred = jnp.linspace(-1.5, 3.5, num=233)[:, jnp.newaxis]
 
-    v_samples = jnp.exp(results[0].particles['v'])
-    f_samples = results[0].particles['f']
+    v_samples = jnp.exp(results[0].particles['v']['gp'])
+    f_samples = results[0].particles['f']['gp']
 
     key, key_v, key_f, key_y = jrnd.split(key, 4)
 
@@ -440,7 +544,7 @@ def test_fullgp(seed=42):
     key, key_f, key_obs = jrnd.split(key, 3)
     f_true = sample_prior(key_f, x=x, cov_fn=jk.RBF(), cov_params=dict(lengthscale=lengthscale_,
                                             variance=output_scale_))
-    
+
     y = f_true + obs_noise_*jrnd.normal(key_obs, shape=(n,))
 
     ground_truth = dict(f=f_true,
@@ -468,27 +572,25 @@ def test_fullgp(seed=42):
                                                                         scale=1.),
                                                             tfb.Exp())))
 
-    gp_marginal = FullMarginalGPModel(x, y, cov_fn=jk.RBF(), priors=priors)  # Implies likelihood=Gaussian()
-    gp_latent = FullLatentGPModel(x, y, cov_fn=jk.RBF(), priors=priors)  # Defaults to likelihood=Gaussian()
-
+    gp_marginal = FullMarginalGPModel(x, y, cov_fn=jk.RBF(), priors=priors)  
+    gp_latent = FullLatentGPModel(x, y, cov_fn=jk.RBF(), priors=priors)
     print('Inference')
-    
+
     num_particles = 1_000
     num_mcmc_steps = 100
 
     key, gpm_key = jrnd.split(key)
     mgp_particles, _, mgp_marginal_likelihood = gp_marginal.inference(gpm_key,
-                                                                  mode='gibbs-in-smc',
-                                                                  sampling_parameters=dict(num_particles=num_particles, num_mcmc_steps=num_mcmc_steps))
+                                                                    mode='gibbs-in-smc',
+                                                                    sampling_parameters=dict(num_particles=num_particles, 
+                                                                                            num_mcmc_steps=num_mcmc_steps))
 
     key, gpl_key = jrnd.split(key)
     lgp_particles, _, lgp_marginal_likelihood = gp_latent.inference(gpl_key,
-                                                                mode='gibbs-in-smc',
-                                                                sampling_parameters=dict(num_particles=num_particles, num_mcmc_steps=num_mcmc_steps))
+                                                                    mode='gibbs-in-smc',
+                                                                    sampling_parameters=dict(num_particles=num_particles, num_mcmc_steps=num_mcmc_steps))
 
-    trainables = list()
-    for component, val in priors.items():
-        trainables.extend(list(val.keys()))
+    trainables = ['lengthscale', 'variance', 'obs_noise']
 
     num_params = len(trainables)
     show_samples = jnp.array([int(i) for i in num_particles*jnp.linspace(0, 1, num=500)])
@@ -501,9 +603,12 @@ def test_fullgp(seed=42):
                         sharex='col', sharey='col', figsize=(12, 6))
 
     for m, particles in enumerate([mgp_particles, lgp_particles]):
+        tr = dict(lengthscale=particles.particles['kernel']['lengthscale'], 
+                variance=particles.particles['kernel']['variance'], 
+                obs_noise=particles.particles['likelihood']['obs_noise'])
         for j, var in enumerate(trainables):
             ax = axes[m, j]
-            pd = particles.particles[var]
+            pd = tr[var]
             # There are some outliers that skew the axis
             pd_u, pd_l = jnp.percentile(pd, q=99.9), jnp.percentile(pd, q=0.1)
             pd_filtered = jnp.extract(pd>pd_l, pd)

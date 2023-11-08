@@ -10,11 +10,31 @@ from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
+from jax.tree_util import tree_flatten, tree_unflatten
+
+from distrax._src.distributions.distribution import Distribution
+from distrax._src.bijectors.bijector import Bijector
+
+from copy import deepcopy
 import jax
 import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
+
+def cov_default_recursive(cov_fn, defaults = None):
+    if hasattr(cov_fn, 'kernel_set'):
+        cov_fn_defaults = deepcopy(cov_fn)
+        cov_fn_defaults.kernel_set = [cov_default_recursive(cov_fn_) for cov_fn_ in cov_fn.kernel_set]
+        return cov_fn_defaults
+    else:
+        if isinstance(cov_fn, DefaultingKernel):
+            return cov_fn
+        if defaults is None:
+            defaults = dict(variance=1.0)
+        return DefaultingKernel(cov_fn, defaults)
+
+#
 
 
 class FullLatentWishartModel(FullLatentGPModel):
@@ -50,11 +70,11 @@ class FullLatentWishartModel(FullLatentGPModel):
         self.nu = self.D + 1
         self.output_shape = (self.nu, self.D) # nu x d; note that JAX must know the number of elements in this tuple
         likelihood = Wishart(nu=self.nu, d=self.D)
-        self.likelihood = likelihood        
+        self.likelihood = likelihood    
+        cov_fn_defaults = cov_default_recursive(cov_fn)
         super().__init__(X,
                          Y,
-                         cov_fn=DefaultingKernel(base_kernel=cov_fn,
-                                                 defaults=dict(variance=1.0)),
+                         cov_fn=cov_fn_defaults,
                          mean_fn=mean_fn,
                          priors=priors,
                          likelihood=self.likelihood)
@@ -83,11 +103,18 @@ class FullLatentWishartModel(FullLatentGPModel):
 
         """
 
-        initial_state = super().init_fn(key, num_particles)
-        initial_position = initial_state.position
+        priors_flat, priors_treedef = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
+        samples = list()
+        for prior in priors_flat:
+            key, subkey = jrnd.split(key)
+            samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
 
-        mean_params = {param: initial_position[param] for param in self.param_priors.get(f'mean', {})}
-        cov_params = {param: initial_position[param] for param in self.param_priors[f'kernel']}
+        initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples)
+
+        mean_params = initial_position.get('mean', {})
+        cov_params = initial_position.get('kernel', {})
+        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
 
         if num_particles > 1:
             keys = jrnd.split(key, num_particles)
@@ -100,8 +127,8 @@ class FullLatentWishartModel(FullLatentGPModel):
                                                                                  nd=self.output_shape)
             initial_position['f'] = jax.vmap(sample_fun,
                                              in_axes=(0,
-                                                      {k: 0 for k in mean_params},
-                                                      {k: 0 for k in cov_params}))(keys, mean_params, cov_params)
+                                                      mean_param_in_axes,
+                                                      cov_param_in_axes))(keys, mean_params, cov_params)
         else:
             key, subkey = jrnd.split(key)
             initial_position['f'] = sample_prior(key=subkey,
@@ -116,10 +143,16 @@ class FullLatentWishartModel(FullLatentGPModel):
 
     #
     def predict_Sigma(self, key: PRNGKey, x_pred: Array):
+        """Get posterior predictive of covariance process.
+
+        We first determine posterior predictive samples of the latent functions
+        f, and then construct the Wishart process using these.
+
+        """ 
         samples = self.get_monte_carlo_samples()
         f_pred = self.predict_f(key, x_pred)
         Sigma_pred = jax.vmap(construct_wishart_Lvec, in_axes=(0, 0))(f_pred,
-                                                                      samples['L_vec'])
+                                                                      samples['likelihood']['L_vec'])
         return Sigma_pred
 
     #
