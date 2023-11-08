@@ -103,7 +103,7 @@ def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str ='.') -> Muta
 #### TEST CASES
 
 def test_gwp(seed=42, show_latents=False):
-    key = jrnd.PRNGKey(42)
+    key = jrnd.PRNGKey(seed)
     key, key_F, key_Y = jrnd.split(key, 3)
 
     cov_fn = DefaultingKernel(jk.RBF(), dict(variance=1.0)) * DefaultingKernel(jk.Periodic(), dict(variance=1.0))
@@ -117,7 +117,6 @@ def test_gwp(seed=42, show_latents=False):
     nu = d + 1
     x = jnp.linspace(0, 1, n)[:, jnp.newaxis]
 
-    V_gt = jnp.array([[2, -1, 0], [-1, 2, -1], [0, -1, 2]])
     V_gt = jnp.eye(d)
     L_gt = jnp.linalg.cholesky(V_gt)
 
