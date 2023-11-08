@@ -171,15 +171,15 @@ class SparseGPModel(FullGPModel):
 
 
         # Sample inducing variables u
-            # mean_u = jnp.zeros(samples_Z.shape[0])
-            # cov_ZZ = self.cov_fn.cross_covariance(
-            #     params=cov_params,
-            #     x=samples_Z, y=samples_Z) 
-            # cov_ZZ = cov_ZZ + jitter * jnp.eye(samples_Z.shape[0])
-            # samples_u = jnp.asarray(mean_u + jnp.dot(
-            #     jnp.linalg.cholesky(cov_ZZ),
-            #     jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
-            samples_u = self.f_true[samples_Z_idx] # HACK: Drawing true samples
+            mean_u = jnp.zeros(samples_Z.shape[0])
+            cov_ZZ = self.cov_fn.cross_covariance(
+                params=cov_params,
+                x=samples_Z, y=samples_Z) 
+            cov_ZZ = cov_ZZ + jitter * jnp.eye(samples_Z.shape[0])
+            samples_u = jnp.asarray(mean_u + jnp.dot(
+                jnp.linalg.cholesky(cov_ZZ),
+                jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
+            # samples_u = self.f_true[samples_Z_idx] # HACK: Drawing true samples
 
         # compute mean and cov. function of sparse GP            
             mean_gp, cov_gp = self._compute_sparse_gp(
@@ -447,7 +447,7 @@ class SparseGPModel(FullGPModel):
                 position[param] = val
 
         # update u  # HACK: Deactivated u
-        if False:
+        if True:
             # get updated cov. parameters theta
             cov_params = self.__get_component_parameters(position, 'kernel')
 
