@@ -134,7 +134,8 @@ class SparseGPModel(FullGPModel):
             key_sample_u = sub_key[1]
             key_sample_f = sub_key[2]
      
-            # GP mean
+            # GP mean  
+            # TODO: Remove this block. I work with zero mean and a missing mean function should be initialized in __init__
             if 'mean_function' in self.param_priors.keys():
                 mean_params = {param: initial_position_[param] for param in self.param_priors['mean_function']} 
                 mean = self.mean_fn.mean(params=mean_params, x=self.X)
@@ -171,15 +172,15 @@ class SparseGPModel(FullGPModel):
 
 
         # Sample inducing variables u
-            mean_u = jnp.zeros(samples_Z.shape[0])
-            cov_ZZ = self.cov_fn.cross_covariance(
-                params=cov_params,
-                x=samples_Z, y=samples_Z) 
-            cov_ZZ = cov_ZZ + jitter * jnp.eye(samples_Z.shape[0])
-            samples_u = jnp.asarray(mean_u + jnp.dot(
-                jnp.linalg.cholesky(cov_ZZ),
-                jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
-            # samples_u = self.f_true[samples_Z_idx] # HACK: Drawing true samples
+            # mean_u = jnp.zeros(samples_Z.shape[0])
+            # cov_ZZ = self.cov_fn.cross_covariance(
+            #     params=cov_params,
+            #     x=samples_Z, y=samples_Z) 
+            # cov_ZZ = cov_ZZ + jitter * jnp.eye(samples_Z.shape[0])
+            # samples_u = jnp.asarray(mean_u + jnp.dot(
+            #     jnp.linalg.cholesky(cov_ZZ),
+            #     jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
+            samples_u = self.f_true[samples_Z_idx] # HACK: Drawing true samples
 
         # compute mean and cov. function of sparse GP            
             mean_gp, cov_gp = self._compute_sparse_gp(
@@ -258,13 +259,13 @@ class SparseGPModel(FullGPModel):
         p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
 
         """
-        # compute new mean and covariance matrix of sparse latent GP
+
+        # update f
         mean, cov = self._compute_sparse_gp(
                     cov_params=cov_params, 
                     x=self.X,
                     samples_Z=position['Z'], 
                     samples_u=position['u'])
-        # cov += likelihood_params['obs_noise'] * jnp.eye(self.n)
         cov += jitter * jnp.eye(self.n)
 
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
@@ -278,7 +279,7 @@ class SparseGPModel(FullGPModel):
 
         # update cov parameters 
         # if len(cov_params):  # theta
-        if False:  # HACK: Deactivated cov update
+        if True:  # HACK: Deactivated cov update
             """Sample parameters of the kernel function using: 
 
             p(theta | u, Z, f, X) \propto 
@@ -304,7 +305,7 @@ class SparseGPModel(FullGPModel):
                     x=position['Z'],
                     y=position['Z'])
                 pdf = dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position['u'])
-                log_pdf += pdf
+                # log_pdf += pdf  # HACK: removed p(u | ...) for testing.
                 # jax.debug.print(
                 #     "🧐 p(u | Z, theta): {logd} {d}", 
                 #     logd = pdf, d=jnp.exp(pdf)) 
@@ -342,10 +343,6 @@ class SparseGPModel(FullGPModel):
                 stepsize=mcmc_parameters.get(
                     'stepsizes', 
                     dict()).get('kernel', 0.1))  # NOTE: original was 0.1
-            
-            # jax.debug.print(
-            #     "🧐 gibbs cov acceptance rate {d}", 
-            #     d = sub_info.acceptance_rate)
             
             for param, val in sub_state.items():
                 position[param] = val
@@ -447,7 +444,7 @@ class SparseGPModel(FullGPModel):
                 position[param] = val
 
         # update u  # HACK: Deactivated u
-        if True:
+        if False:
             # get updated cov. parameters theta
             cov_params = self.__get_component_parameters(position, 'kernel')
 
