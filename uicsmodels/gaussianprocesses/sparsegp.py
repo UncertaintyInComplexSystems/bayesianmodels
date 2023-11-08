@@ -171,8 +171,11 @@ class SparseGPModel(FullGPModel):
 
 
         # Sample inducing variables u
-                # NOTE: To account for SMC particles, add dimension in `jrnd.normal`
             # mean_u = jnp.zeros(samples_Z.shape[0])
+            # cov_ZZ = self.cov_fn.cross_covariance(
+            #     params=cov_params,
+            #     x=samples_Z, y=samples_Z) 
+            # cov_ZZ = cov_ZZ + jitter * jnp.eye(samples_Z.shape[0])
             # samples_u = jnp.asarray(mean_u + jnp.dot(
             #     jnp.linalg.cholesky(cov_ZZ),
             #     jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
@@ -275,7 +278,7 @@ class SparseGPModel(FullGPModel):
 
         # update cov parameters 
         # if len(cov_params):  # theta
-        if True:  # HACK: Deactivated cov update
+        if False:  # HACK: Deactivated cov update
             """Sample parameters of the kernel function using: 
 
             p(theta | u, Z, f, X) \propto 
