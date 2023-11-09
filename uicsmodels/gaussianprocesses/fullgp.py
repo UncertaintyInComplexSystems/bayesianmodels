@@ -167,23 +167,6 @@ class FullLatentGPModel(FullGPModel):
 
         if num_particles > 1:
             keys = jrnd.split(key, num_particles)                
-<<<<<<< HEAD
-            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(
-                key=key_, 
-                mean_params=mean_params_, 
-                cov_params=cov_params_, 
-                mean_fn=self.mean_fn, 
-                cov_fn=self.cov_fn, 
-                x=self.X)
-
-            initial_position['f'] = jax.vmap(
-                sample_fun, 
-                in_axes=(
-                    0,
-                    {k: 0 for k in mean_params},
-                    {k: 0 for k in cov_params}))
-            (keys, mean_params, cov_params)
-=======
             sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(key=key_, 
                                                                                 mean_params=mean_params_,
                                                                                 cov_params=cov_params_,
@@ -194,7 +177,6 @@ class FullLatentGPModel(FullGPModel):
                                              in_axes=(0,
                                                       mean_param_in_axes,
                                                       cov_param_in_axes))(keys, mean_params, cov_params)
->>>>>>> main
         else:
             key, subkey = jrnd.split(key)
             initial_position['f'] = sample_prior(subkey, 
@@ -208,12 +190,7 @@ class FullLatentGPModel(FullGPModel):
 
         #
 
-<<<<<<< HEAD
-
-    def gibbs_fn(self, key, state, loglik_fn__, temperature=1.0, **mcmc_parameters):
-=======
     def gibbs_fn(self, key: PRNGKey, state: GibbsState, temperature: Float= 1.0, **mcmc_parameters):
->>>>>>> main
         """The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
@@ -267,15 +244,9 @@ class FullLatentGPModel(FullGPModel):
                                        cov_fn=self.cov_fn,
                                        mean_params=mean_params,
                                        cov_params=cov_params,
-<<<<<<< HEAD
-                                       hyperpriors=self.param_priors['kernel'])
-            for param, val in sub_state.items():
-                position[param] = val
-=======
                                        hyperpriors=self.param_priors['mean'])
             position['mean'] = sub_state
             
->>>>>>> main
         #
 
         if len(cov_params):

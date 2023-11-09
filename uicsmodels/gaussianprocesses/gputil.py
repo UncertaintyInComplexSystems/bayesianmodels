@@ -27,17 +27,6 @@ def plot_dist(ax, x, samples, **kwargs):
 
 #
 
-<<<<<<< HEAD
-def sample_predictive(key: PRNGKey, 
-                      x: Array,  # z
-                      z: Array,   # Note: Test data x-domain to predict over
-                      target: Array,  # current samples of u
-                      cov_fn: Callable,  
-                      mean_params: Dict = None,
-                      cov_params: Dict = None,
-                      mean_fn: Callable = Zero(),
-                      obs_noise = None):  # None for u
-=======
 def sample_predictive(key: PRNGKey,
                          x: Array,
                          z: Array,
@@ -47,7 +36,6 @@ def sample_predictive(key: PRNGKey,
                          cov_params: Dict = None,
                          mean_fn: Callable = Zero(),
                          obs_noise = None):
->>>>>>> main
     """Sample latent f for new points x_pred given one posterior sample.
 
     See Rasmussen & Williams. We are sampling from the posterior predictive for
