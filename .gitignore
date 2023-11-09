@@ -1,6 +1,6 @@
 
 # Byte-compiled / optimized / DLL files
-__pycache__/
+__pycache__
 *.py[cod]
 *$py.class
 
@@ -79,11 +79,7 @@ venv.bak/
 
 # others
 data
-<<<<<<< Updated upstream
 results/
-environment.yml.bak
-=======
 environment.yml.bak
 *.pkl
 .DS_Store
->>>>>>> Stashed changes
