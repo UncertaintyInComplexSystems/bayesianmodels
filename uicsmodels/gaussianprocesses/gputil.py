@@ -137,11 +137,16 @@ def sample_prior(key: PRNGKey,
     return f
 
 #
-def update_gaussian_process(key: PRNGKey, f_current: Array, loglikelihood_fn: Callable, X: Array,
-                            mean_fn: Callable = Zero(),
-                            cov_fn: Callable = jk.RBF(),
-                            mean_params: Dict = None,
-                            cov_params: Dict = None):
+def update_gaussian_process(
+        key: PRNGKey, 
+        f_current: Array, 
+        loglikelihood_fn: Callable, 
+        X: Array,
+        mean_fn: Callable = Zero(),
+        cov_fn: Callable = jk.RBF(),
+        mean_params: Dict = None,
+        cov_params: Dict = None):
+    
     n = X.shape[0]
     mean = mean_fn.mean(params=mean_params, x=X)
     cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
@@ -217,8 +222,10 @@ def update_gaussian_process_mean_params(key: PRNGKey,
     cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
     def logdensity_fn_(mean_params_):
         log_pdf = 0
+
         for param, val in mean_params_.items():
             log_pdf += jnp.sum(hyperpriors[param].log_prob(val))
+            
         mean_ = mean_fn.mean(params=mean_params_, x=X)
         if jnp.ndim(f) == 1:
             log_pdf += dx.MultivariateNormalFullCovariance(mean_, cov).log_prob(f)

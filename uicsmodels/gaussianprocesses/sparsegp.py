@@ -19,13 +19,13 @@ from jax.random import PRNGKey
 import jax.random as jrnd
 from blackjax import elliptical_slice, rmh
 
-import numpy as np
-
 from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
 jitter = 1e-6
+
+from icecream import ic
 
 
 class SparseGPModel(FullGPModel):  
@@ -75,32 +75,33 @@ class SparseGPModel(FullGPModel):
                 self.param_priors[component]} if component in self.param_priors else {}
 
     #
-    def _compute_sparse_gp(self, cov_params, x, samples_Z, samples_u):
+    def _compute_sparse_gp(
+            self, cov_params, x, samples_Z, samples_u, add_jitter=True):
         """
         Returns mean and covariance matrix of sparse gp
         """
+
         cov_XX = self.cov_fn.cross_covariance(
             params=cov_params,
-            x=x, y=x) + jitter * jnp.eye(x.shape[0])
-        # np.linalg.cholesky(cov_XX) # HACK to check pos. def.
+            x=x, y=x) 
+        cov_XX += jitter * jnp.eye(cov_XX.shape[0])
         
         cov_ZZ = self.cov_fn.cross_covariance(
             params=cov_params,
-            x=samples_Z, y=samples_Z) + jitter * jnp.eye(samples_Z.shape[0])
-        # np.linalg.cholesky(cov_ZZ) # HACK to check pos. def. 
+            x=samples_Z, y=samples_Z)
+        cov_ZZ += jitter * jnp.eye(cov_ZZ.shape[0])
 
         cov_XZ = self.cov_fn.cross_covariance(
             params=cov_params,
-            x=x, y=samples_Z) # + jitter * jnp.eye(self.n, self.m)
-        cov_ZX = jnp.transpose(cov_XZ)
+            x=x, y=samples_Z)
 
         mean_gp = jnp.dot(cov_XZ, jnp.linalg.solve(cov_ZZ, samples_u))
+        ZZ_ZX = jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ))
 
-        ZZ_ZX = jnp.linalg.solve(cov_ZZ, cov_ZX)
         cov_gp = cov_XX - jnp.dot(cov_XZ, ZZ_ZX)
-        # np.linalg.cholesky(cov_gp)
 
-        # cov_gp = cov_gp * jnp.eye(x.shape[0])  # HACK: MAking cov diagonal.
+        if add_jitter:
+            cov_gp += jitter * jnp.eye(cov_gp.shape[0])
 
         return mean_gp, cov_gp
 
@@ -125,101 +126,90 @@ class SparseGPModel(FullGPModel):
         """
         
         key, key_super_init = jrnd.split(key)
+
+        # sample from hyperparameter priors
         initial_state = super().init_fn(key_super_init, num_particles)
 
-        def sample_latent(key, initial_position_):
+        def sample_latent(key, cov_params, Z_params):
+            """
+            Sample Z and u, as well as f from resulting sparse GP
+            """
             _, *sub_key = jrnd.split(key, num=4)
             key_sample_z = sub_key[0]
             key_sample_u = sub_key[1]
             key_sample_f = sub_key[2]
-     
-            # GP mean  
-            # TODO: Remove this block. I work with zero mean and a missing mean function should be initialized in __init__
-            if 'mean_function' in self.param_priors.keys():
-                mean_params = {param: initial_position_[param] for param in self.param_priors['mean_function']} 
-                mean = self.mean_fn.mean(params=mean_params, x=self.X)
-            else:
-                # mean = jnp.zeros_like(self.X)
-                mean = jnp.zeros((self.X.shape[0], ))
-            if jnp.ndim(mean) == 1: 
-                mean = mean[:, jnp.newaxis]
 
-        # GP cov. 
-            cov_params = {param: initial_position_[param] for param in self.param_priors['kernel']}
-            
-            # print('X', jnp.min(self.X), jnp.max(self.X))
-            # HACK: Quick 'fix' to 'deal' with missing parameters when computing covariances of Z. 
-            assert cov_params, 'cov_params not specified, will break sampling Z'
-
-
-        # sample M inducing inputs Z
-            Z_params = {param: initial_position_[param] for param in self.param_priors['inducing_inputs_Z']}
-            # print(f"params Z: {Z_params['mean'][0:3]}..., {Z_params['scale'][0:3]}...")
-
+            # sample M inducing inputs Z
             # samples_Z = dx.Normal(   
             #     loc=Z_params['mean'],
             #     scale=Z_params['scale']).sample(seed=key_sample_z)
-            # HACK: evenly-spaced Z in x domain
-            #   allows drawing true u samples
-            lin_Z = np.linspace(
+
+            # true evenly-spaced Z in x domain allows drawing true u samples
+            lin_Z = jnp.linspace(
                 jnp.min(self.X), 
                 jnp.max(self.X), 
                 self.m)
-            samples_Z_idx = jnp.searchsorted(self.X.flatten(), lin_Z)  # find closest values in X-domain
+            # find and select closest values in X-domain
+            samples_Z_idx = jnp.searchsorted(
+                self.X.flatten(), lin_Z)
             samples_Z = self.X.flatten()[samples_Z_idx]
-            # print(f"samples_Z: {samples_Z.shape} {samples_Z[0:3]}...")
 
 
-        # Sample inducing variables u
-            # mean_u = jnp.zeros(samples_Z.shape[0])
-            # cov_ZZ = self.cov_fn.cross_covariance(
-            #     params=cov_params,
-            #     x=samples_Z, y=samples_Z) 
-            # cov_ZZ = cov_ZZ + jitter * jnp.eye(samples_Z.shape[0])
-            # samples_u = jnp.asarray(mean_u + jnp.dot(
-            #     jnp.linalg.cholesky(cov_ZZ),
-            #     jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
-            samples_u = self.f_true[samples_Z_idx] # HACK: Drawing true samples
+            # Sample inducing variables u
+            mean_u = jnp.zeros(samples_Z.shape[0])
+            cov_ZZ = self.cov_fn.cross_covariance(
+                params=cov_params,
+                x=samples_Z, y=samples_Z) 
+            cov_ZZ = cov_ZZ + jitter * jnp.eye(cov_ZZ.shape[0])
+            samples_u = jnp.asarray(mean_u + jnp.dot(
+                jnp.linalg.cholesky(cov_ZZ),
+                jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
+
+            # True u samples based on true Z's
+            # samples_u = self.f_true[samples_Z_idx]
             
 
-        # compute mean and cov. function of sparse GP            
+            # compute mean and cov. function of sparse GP
             mean_gp, cov_gp = self._compute_sparse_gp(
                     cov_params=cov_params, 
                     x=self.X,
                     samples_Z=samples_Z, 
                     samples_u=samples_u)
-            cov_gp += jitter * jnp.eye(self.n)
 
-
-        # Sample from GP
+            # Sample from GP
             # NOTE: tell cholesky that the cov. is diagonal, if I set it too. 
             # NOTE: To account for SMC particles, add dimension in `jrnd.normal`
             L = jnp.linalg.cholesky(cov_gp)
             z = jrnd.normal(key_sample_f, shape=[self.n])
             samples_f = jnp.asarray(mean_gp + jnp.dot(L, z))
-            # print('samples_f', samples_f.shape, samples_f[0:5])
             
             return samples_Z.flatten(), samples_u, samples_f.flatten()
 
         #
         initial_position = initial_state.position
 
+        cov_params = initial_position.get('kernel', {})
+        Z_params = initial_position.get('inducing_inputs_Z', {})
+
         if num_particles > 1:
             # We vmap across the first dimension of the elements *in* the
             # dictionary, rather than over the dictionary itself.
             key_sample_particles = jrnd.split(key, num_particles)
 
+            cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+            Z_param_in_axes = jax.tree_map(lambda l: 0, Z_params)
+
             samples_Z, samples_u, samples_f = jax.vmap(
                 sample_latent,
-                in_axes=(
-                    0, 
-                    {k: 0 for k in initial_position}))(key_sample_particles, initial_position)
+                in_axes=(0, cov_param_in_axes, Z_param_in_axes)
+                )(key_sample_particles, cov_params, Z_params)
+                
         else:
-            # HACK: Might be better to recieve a namedtuple from from `sample_latent`, or two tuples, one with names and the other with corresponding data
+            # NOTE: Not tested / modified after pulling latest changes.
             _, key_sample_latents = jrnd.split(key)
 
             samples_Z, samples_u, samples_f = sample_latent(
-                key_sample_latents, initial_position)
+                key_sample_latents, cov_params, Z_params)
 
         initial_position['Z'] = samples_Z
         initial_position['u'] = samples_u
@@ -229,7 +219,10 @@ class SparseGPModel(FullGPModel):
 
         #
 
-    def gibbs_fn(self, key, state, loglik_fn__=None, temperature=1.0, **mcmc_parameters): # HACK: Gave loglik_fn None as default
+    def gibbs_fn(
+            self, key, state, 
+            loglik_fn__=None, temperature=1.0, **mcmc_parameters): 
+        # HACK: Gave loglik_fn None as default, can it actually be removed?
         """The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
@@ -250,9 +243,8 @@ class SparseGPModel(FullGPModel):
         # get current hypter-parameters from gibbs-state
         position = state.position.copy()
 
-        likelihood_params = self.__get_component_parameters(position, 'likelihood')
-        mean_params = self.__get_component_parameters(position, 'mean')
-        cov_params = self.__get_component_parameters(position, 'kernel')
+        likelihood_params = position.get('likelihood', {})
+        cov_params = position.get('kernel', {}) 
 
         """Sample the latent GP using:
 
@@ -265,12 +257,14 @@ class SparseGPModel(FullGPModel):
                     cov_params=cov_params, 
                     x=self.X,
                     samples_Z=position['Z'], 
-                    samples_u=position['u'])
-        cov += jitter * jnp.eye(self.n)
+                    samples_u=position['u'],
+                    add_jitter=True)
 
-        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
+        loglikelihood_fn_ = lambda f_: temperature * jnp.sum(
+            self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
 
         key, subkey = jrnd.split(key)
+        # TODO: New version uses update_gaussian_process
         position['f'], f_info = update_correlated_gaussian(
             subkey, 
             position['f'], 
@@ -288,50 +282,29 @@ class SparseGPModel(FullGPModel):
 
             def logdensity_fn_(theta_):
                 log_pdf = 0
-
-            # p(theta) | cov. kernel parameter
-                for param, val in theta_.items():
-                    pdf = jnp.sum(self.param_priors['kernel'][param].log_prob(val))
-                    log_pdf += pdf
-                    # if param == 'lengthscale':
-                    #     jax.debug.print(
-                    #         "🧐 p(theta) lengthscale: {logd} {d} {val}",
-                    #         logd = pdf, d=jnp.exp(pdf), val=val)
                 
-            # p(u | Z, theta)
-                mean_u = self.mean_fn.mean(params=mean_params, x=position['Z'])
+                # p(theta) | cov. kernel parameter
+                for param, val in theta_.items():
+                    # jax.debug.print('val {d}', d=val)
+                    log_pdf += jnp.sum(self.param_priors['kernel'][param].log_prob(val))
+                
+                # p(u | Z, theta)
+                mean_u = self.mean_fn.mean(params=None, x=position['Z'])
                 cov_u = self.cov_fn.cross_covariance(
                     params=theta_,
                     x=position['Z'],
                     y=position['Z'])
-                pdf = dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position['u'])
-                # log_pdf += pdf  # HACK: removed p(u | ...) for testing.
+                log_pdf += dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position['u'])
 
-                # jax.debug.print(
-                #     "🧐 p(u | Z, theta): {logd} {d}", 
-                #     logd = pdf, d=jnp.exp(pdf)) 
-
-            # p(f | u, Z, theta, X)
+                # p(f | u, Z, theta, X)
                 mean_gp, cov_gp = self._compute_sparse_gp(
                     cov_params=theta_, 
                     x=self.X,
                     samples_Z=position['Z'],
                     samples_u=position['u'])
                 
-                # cov_gp += likelihood_params['obs_noise'] * jnp.eye(self.n)
-                cov_gp += jitter * jnp.eye(self.n)
-                pdf = dx.MultivariateNormalFullCovariance(
+                log_pdf += dx.MultivariateNormalFullCovariance(
                     mean_gp, cov_gp).log_prob(position['f'])
-                log_pdf += pdf
-                # jax.debug.print(
-                #     "🧐 p(f | u, Z, theta, X): {logd} {d}", 
-                #     logd = pdf, d=jnp.exp(pdf))
-                # jax.debug.print("{d}", d=pdf.shape)
-                
-                # jax.debug.print(
-                #     "🧐 log pdf: {pdf}", pdf = pdf)
-                # jax.debug.print("{d}", d=(position['f']).shape)
-                # jax.debug.print('---------------------------------\n')
                 
                 return log_pdf
 
@@ -344,14 +317,11 @@ class SparseGPModel(FullGPModel):
                 stepsize=mcmc_parameters.get(
                     'stepsizes', 
                     dict()).get('kernel', 0.1))  # NOTE: original was 0.1
-            
-            for param, val in sub_state.items():
-                position[param] = val
-        #
 
+            position['kernel'] = sub_state
+        
         # update likelihood
-        if False:
-        # if len(likelihood_params):  # not specifed in Rossi # TODO: 'deactived' for now, need to adapt update function first.
+        if True:
             """Sample parameters of the likelihood using: 
 
             p(\phi | y, f) \propto p(y | f, phi)p(phi)
@@ -369,11 +339,9 @@ class SparseGPModel(FullGPModel):
             key, subkey = jrnd.split(key)
             sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, 
                                                     stepsize=mcmc_parameters.get('stepsizes', dict()).get('likelihood', 0.1))
-            for param, val in sub_state.items():
-                position[param] = val
-        #
-
-        # update Z  # HACK: Deactivated Z
+            position['likelihood'] = sub_state
+        
+        # update Z  # TODO: needs to be adapted to changes in code-base after merge with main
         if False:
             Z_params = self.__get_component_parameters(
                 position, 
@@ -444,17 +412,17 @@ class SparseGPModel(FullGPModel):
             for param, val in sub_state.items():  # HACk: deactivated Z
                 position[param] = val
 
-        # update u  # HACK: Deactivated u
-        if False:
+        # update u 
+        if True:
             # get updated cov. parameters theta
-            cov_params = self.__get_component_parameters(position, 'kernel')
+            cov_params = position.get('kernel', {}) 
 
-            mean_u = self.mean_fn.mean(params=mean_params, x=position['Z'])
+            mean_u = self.mean_fn.mean(params=None, x=position['Z'])
             cov_u = self.cov_fn.cross_covariance(
                 params=cov_params,
                 x=position['Z'],
                 y=position['Z'])
-            cov_u += jitter * jnp.eye(position['Z'].shape[0])
+            cov_u += jitter * jnp.eye(*cov_u.shape)
 
             def loglikelihood_fn_(u_):
                 mean, cov = self._compute_sparse_gp(
@@ -463,7 +431,6 @@ class SparseGPModel(FullGPModel):
                     samples_Z=position['Z'],
                     samples_u=u_)
 
-                # NOTE: left temprature out, but is needed for actualy data depnedent likeliehood.
                 return dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
 
             key, subkey = jrnd.split(key)
@@ -473,10 +440,10 @@ class SparseGPModel(FullGPModel):
                 loglikelihood_fn_, 
                 mean_u, cov_u)
         
-        return GibbsState(
-            position=position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
 
-    # TODO: Old version, needs changing for SMC
+        return GibbsState(position=position), None 
+            # We return None to satisfy SMC; this needs to be filled with acceptance information
+
     def loglikelihood_fn(self) -> Callable:
         """Returns the log-likelihood function for the model given a state.
 
@@ -489,9 +456,9 @@ class SparseGPModel(FullGPModel):
         """
         def loglikelihood_fn_(state: GibbsState) -> Float:
             # position = state.position
+            # jax.debug.print('Using loglikelihood_fn!!!')
             position = getattr(state, 'position', state)
-            phi = {param: position[param] for param in
-                   self.param_priors['likelihood']} if 'likelihood' in self.param_priors else {}
+            phi = state.get('likelihood', {})
             f = position['f']
             log_pdf = jnp.sum(self.likelihood.log_prob(params=phi, f=f, y=self.y))
             return log_pdf
@@ -499,7 +466,6 @@ class SparseGPModel(FullGPModel):
         #
         return loglikelihood_fn_
 
-    # TODO: Old version, but perhaps not used.
     def logprior_fn(self) -> Callable:
         """Returns the log-prior function for the model given a state.
 
@@ -509,8 +475,9 @@ class SparseGPModel(FullGPModel):
             A function that computes the log-prior of the model given a state.
 
         """
-
+        
         def logprior_fn_(state: GibbsState) -> Float:
+            jax.debug.print('Using logprior_fn!!!')
             position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
             logprob = 0
             for component, params in self.param_priors.items():
@@ -518,6 +485,7 @@ class SparseGPModel(FullGPModel):
                 for param, dist in params.items():
                     # parameters per component
                     logprob += jnp.sum(dist.log_prob(position[param]))
+
             # plus the logprob of the latent f itself
             psi = {param: position[param] for param in self.param_priors['mean']} if 'mean' in self.param_priors else {}
             theta = {param: position[param] for param in
@@ -538,8 +506,10 @@ class SparseGPModel(FullGPModel):
         num_particles = samples['f'].shape[0]
         key_samples = jrnd.split(key, num_particles)
 
-        mean_params = {param: samples[param] for param in self.param_priors.get(f'mean', {})}
-        cov_params = {param: samples[param] for param in self.param_priors[f'kernel']}
+        mean_params = samples.get('mean', {})
+        cov_params = samples.get('kernel', {})
+        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
 
         sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(
             key, 
@@ -550,28 +520,52 @@ class SparseGPModel(FullGPModel):
             x=self.X, 
             z=x_pred, 
             target=target)
-        # NOTE: For predictive u
-        """
-        def sample_predictive(key: PRNGKey, 
-                      x: Array,  # z
-                      z: Array,   # Note: Test data x-domain to predict over
-                      target: Array,  # current samples of u
-                      cov_fn: Callable,  
-                      mean_params: Dict = None,
-                      cov_params: Dict = None,
-                      mean_fn: Callable = Zero(),
-                      obs_noise = None):  # None for u
-        """
 
         keys = jrnd.split(key, num_particles)
-        target_pred = jax.vmap(jax.jit(sample_fun), 
-                        in_axes=(0, 
-                        {k: 0 for k in mean_params}, 
-                            {k: 0 for k in cov_params}, 
-                                0))(keys, 
-                                    mean_params, 
-                                    cov_params, 
-                                    samples['f'])
+        target_pred = jax.vmap(
+            jax.jit(sample_fun), 
+            in_axes=(0, mean_param_in_axes, cov_param_in_axes, 0))(
+                keys,
+                mean_params,
+                cov_params, 
+                samples['f'])
+
+        return target_pred
+
+
+    def predict_f_from_u(self, key: PRNGKey, x_pred: ArrayTree):
+        samples = self.get_monte_carlo_samples()
+        num_particles = samples['f'].shape[0]
+        key_samples = jrnd.split(key, num_particles)
+
+        mean_params = samples.get('mean', {})
+        cov_params = samples.get('kernel', {})
+        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+        
+        Z = samples.get('Z')
+        Z = jnp.mean(Z, axis=0)  # HACK: This is only valid as long as all Z's are the same accross particles
+
+        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(
+            key,
+            x=Z, 
+            z=x_pred,
+            target=target,
+            mean_params=mean_params, 
+            cov_params=cov_params, 
+            mean_fn=self.mean_fn,
+            cov_fn=self.cov_fn,
+            obs_noise=None
+            )
+
+        keys = jrnd.split(key, num_particles)
+        target_pred = jax.vmap(
+            jax.jit(sample_fun), 
+            in_axes=(0, mean_param_in_axes, cov_param_in_axes, 0))(
+                keys,
+                mean_params,
+                cov_params, 
+                samples['u'])
 
         return target_pred
 

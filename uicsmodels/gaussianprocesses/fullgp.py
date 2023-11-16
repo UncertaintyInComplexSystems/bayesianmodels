@@ -155,7 +155,6 @@ class FullLatentGPModel(FullGPModel):
             GibbsState
 
         """
-        print('full-gp init')
         
         initial_state = super().init_fn(key, num_particles)
         initial_position = initial_state.position
@@ -164,19 +163,22 @@ class FullLatentGPModel(FullGPModel):
         cov_params = initial_position.get('kernel', {})
         mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
         cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+        print(cov_params['lengthscale'].shape)
 
         if num_particles > 1:
             keys = jrnd.split(key, num_particles)                
-            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(key=key_, 
-                                                                                mean_params=mean_params_,
-                                                                                cov_params=cov_params_,
-                                                                                mean_fn=self.mean_fn,
-                                                                                cov_fn=self.cov_fn, 
-                                                                                x=self.X)
+            sample_fun = lambda key_, mean_params_, cov_params_: sample_prior(
+                key=key_,
+                mean_params=mean_params_,
+                cov_params=cov_params_,
+                mean_fn=self.mean_fn,
+                cov_fn=self.cov_fn,
+                x=self.X)
             initial_position['f'] = jax.vmap(sample_fun,
                                              in_axes=(0,
                                                       mean_param_in_axes,
-                                                      cov_param_in_axes))(keys, mean_params, cov_params)
+                                                      cov_param_in_axes)
+                                                      )(keys, mean_params, cov_params)
         else:
             key, subkey = jrnd.split(key)
             initial_position['f'] = sample_prior(subkey, 
