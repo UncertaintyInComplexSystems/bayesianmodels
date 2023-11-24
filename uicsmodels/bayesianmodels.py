@@ -45,11 +45,11 @@ class BayesianModel(ABC):
 
     #
     def loglikelihood_fn(self):
-        raise NotImplementedError()
+        pass
 
     #
     def logprior_fn(self):
-        raise NotImplementedError()
+        pass
 
     #
     def inference(self, key: PRNGKey, mode='gibbs-in-smc', sampling_parameters: Dict = None):
