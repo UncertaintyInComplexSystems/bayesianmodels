@@ -75,15 +75,49 @@ class AbstractLikelihood(ABC):
         pass
 
     #
-    @abstractmethod
-    def log_prob(self, params, f, y):
-        pass
+    # @abstractmethod
+    # def log_prob(self, params, f, y):
+    #     pass
 
-    #
+    # #
     def log_prob(self, params, f, y):
         return self.likelihood(params, f).log_prob(y)
 
     #
+#
+class RepeatedObsLikelihood(AbstractLikelihood):
+
+    def __init__(self, base_likelihood, inv_i):
+        # Note: checking if x is sorted takes O(n); this seems expensive as a check here
+        self.base_likelihood = base_likelihood
+        self.inv_i = inv_i
+
+    #
+    def link_function(self, f):
+        return self.base_likelihood.link_function()
+
+    #
+    def likelihood(self, params, f, do_reverse=True):
+        if do_reverse:
+            f = f[self.inv_i]
+        return self.base_likelihood.likelihood(params, f)
+
+    #
+
+#
+class Gaussian(AbstractLikelihood):
+
+    def link_function(self, f):
+        """Identity function
+
+        """
+        return f
+    
+    #
+    def likelihood(self, params, f):
+        return dx.Normal(loc=self.link_function(f), scale=params['obs_noise'])
+
+    #    
 #
 class Wishart(AbstractLikelihood):
 
@@ -94,6 +128,9 @@ class Wishart(AbstractLikelihood):
     #
 
     def link_function(self, f):
+        """Identity function
+
+        """
         return f
 
     #
@@ -110,20 +147,6 @@ class Wishart(AbstractLikelihood):
                                                    covariance_matrix=Sigma)
 
     #
-#
-class Gaussian(AbstractLikelihood):
-
-    def link_function(self, f):
-        """Identity function
-
-        """
-        return f
-    
-    #
-    def likelihood(self, params, f):
-        return dx.Normal(loc=self.link_function(f), scale=params['obs_noise'])
-
-    #    
 #
 
 class Bernoulli(AbstractLikelihood):

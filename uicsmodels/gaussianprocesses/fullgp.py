@@ -2,7 +2,7 @@ from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params, update_gaussian_process_obs_params
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
-from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
+from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian, RepeatedObsLikelihood
 
 from jax import Array
 from jaxtyping import Float
@@ -30,16 +30,17 @@ class FullGPModel(BayesianModel):
     def __init__(self, X, y,
                  cov_fn: Optional[Callable],
                  mean_fn: Callable = None,
-                 priors: Dict = None):
+                 priors: Dict = None,
+                 duplicate_input=False):
         if jnp.ndim(X) == 1:
-            X = X[:, jnp.newaxis]
+            X = X[:, jnp.newaxis]        
         # Validate arguments
-        if X.shape[0] != len(y):
+        if X.shape[0] > len(y):
             raise ValueError(
                 f'X and y should have the same leading dimension, '
                 f'but X has shape {X.shape} and y has shape {y.shape}')
-        self.X, self.y = X, y
-        self.n = self.X.shape[0]
+        self.X, self.y = X, y        
+        self.n = self.X.shape[0]        
         if mean_fn is None:
             mean_fn = Zero()
         self.mean_fn = mean_fn
@@ -99,7 +100,8 @@ class FullGPModel(BayesianModel):
     #
     
 #
-        
+
+       
 class FullLatentGPModel(FullGPModel):
 
     """The latent Gaussian process model.
@@ -129,11 +131,12 @@ class FullLatentGPModel(FullGPModel):
                  cov_fn: Callable,
                  mean_fn: Optional[Callable] = None,
                  priors: Dict = None,
-                 likelihood: AbstractLikelihood = None):
+                 likelihood: AbstractLikelihood = None,
+                 **kwargs):
         if likelihood is None:
             likelihood = Gaussian()
         self.likelihood = likelihood
-        super().__init__(X, y, cov_fn, mean_fn, priors)      
+        super().__init__(X, y, cov_fn, mean_fn, priors, **kwargs)      
 
     #
     def init_fn(self, key, num_particles=1):
@@ -313,10 +316,10 @@ class FullLatentGPModel(FullGPModel):
         # todo: add 2D vmap
 
         """
-
         def logprior_fn_(state: GibbsState) -> Float:
+            # This function isn't reached??
             # to work in both Blackjax' MCMC and SMC environments
-            position = getattr(state, 'position', state)  
+            position = getattr(state, 'position', state) 
             logprob = 0
             for component, params in self.param_priors.items():
                 for param, dist in params.items():
@@ -392,6 +395,10 @@ class FullLatentGPModel(FullGPModel):
         return target_pred
 
     #
+    def forward(self, key, params, f):
+        return self.likelihood.likelihood(params, f).sample(seed=key)
+
+    #
     def predict_y(self, key: PRNGKey, x_pred: Array):
         """Samples from the posterior predictive distribution
 
@@ -412,24 +419,69 @@ class FullLatentGPModel(FullGPModel):
         if samples is None:
             raise AssertionError(
                 f'The posterior predictive distribution can only be called after training.')
-
-        def forward(key, params, f):
-            return self.likelihood.likelihood(params, f).sample(seed=key)
-
-        #
+        
         key, key_f, key_y = jrnd.split(key, 3)
         f_pred = self.predict_f(key_f, x_pred)        
         num_particles = samples['f'].shape[0]
         keys_y = jrnd.split(key_y, num_particles)
         likelihood_params = samples.get('likelihood', {}) #{param: samples[param] for param in self.param_priors['likelihood']}
         obs_param_in_axes = jax.tree_map(lambda l: 0, likelihood_params)
-        y_pred = jax.vmap(jax.jit(forward), 
+        y_pred = jax.vmap(jax.jit(self.forward), 
                           in_axes=(0, 
                                    obs_param_in_axes, 
                                    0))(keys_y, 
                                     likelihood_params, 
                                     f_pred)
         return y_pred
+
+    #
+#
+
+class FullLatentGPModelRepeatedObs(FullLatentGPModel):
+    """An implementation of the full latent GP model that supports repeated 
+    observations at a single input location. This class mostly inherits the 
+    FullLatentGPModel, but identifies unique input locations and ensures these 
+    are duplicated at likelihood evaluations.
+
+    """
+
+    def __init__(self, X, y, 
+                 cov_fn: Callable,
+                 mean_fn: Optional[Callable] = None,
+                 priors: Dict = None,
+                 likelihood: AbstractLikelihood = None):  
+        if jnp.ndim(X) > 1:
+            raise NotImplementedError(f'Repeated input models are only implemented for 1D input, ',
+                                      f'but X is of shape {X.shape}')
+        X = jnp.squeeze(X)
+        # sort observations
+        sort_idx = jnp.argsort(X, axis=0)
+        X = X[sort_idx]
+        y = y[sort_idx]
+
+        # get unique values and reverse indices
+        self.X, self.ix, self.rev_ix = jnp.unique(X, 
+                                                  return_index=True, 
+                                                  return_inverse=True)
+        self.X = self.X[:, jnp.newaxis] 
+        self.y = y
+
+        # self.n = len(self.X)
+        if likelihood is None:
+            likelihood = Gaussian()
+        self.likelihood = RepeatedObsLikelihood(base_likelihood=likelihood,
+                                                inv_i=self.rev_ix)  # not unique
+        self.param_priors = priors
+        if mean_fn is None:
+            mean_fn = Zero()
+        self.mean_fn = mean_fn
+        self.cov_fn = cov_fn               
+
+    #
+    def forward(self, key, params, f):
+        return self.likelihood.likelihood(params, 
+                                          f, 
+                                          do_reverse=False).sample(seed=key)
 
     #
 #
@@ -460,9 +512,10 @@ class FullMarginalGPModel(FullGPModel):
     def __init__(self, X, y,
                  cov_fn: Optional[Callable],
                  mean_fn: Callable = None,
-                 priors: Dict = None):
-        super().__init__(X, y, cov_fn, mean_fn, priors)
+                 priors: Dict = None,
+                 **kwargs):
         self.likelihood = Gaussian()
+        super().__init__(X, y, cov_fn, mean_fn, priors, **kwargs)        
 
     #
     def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
@@ -515,7 +568,7 @@ class FullMarginalGPModel(FullGPModel):
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
             cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
-                                               y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.n)
+                                               y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.X.shape[0])
             logprob = dx.MultivariateNormalFullCovariance(mean, cov).log_prob(self.y)
             return logprob
 
