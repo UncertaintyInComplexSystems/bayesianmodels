@@ -316,8 +316,8 @@ class FullLatentGPModel(FullGPModel):
         # todo: add 2D vmap
 
         """
+        
         def logprior_fn_(state: GibbsState) -> Float:
-            # This function isn't reached??
             # to work in both Blackjax' MCMC and SMC environments
             position = getattr(state, 'position', state) 
             logprob = 0
