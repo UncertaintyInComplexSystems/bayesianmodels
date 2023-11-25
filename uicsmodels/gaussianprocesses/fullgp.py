@@ -316,7 +316,7 @@ class FullLatentGPModel(FullGPModel):
         # todo: add 2D vmap
 
         """
-        
+
         def logprior_fn_(state: GibbsState) -> Float:
             # to work in both Blackjax' MCMC and SMC environments
             position = getattr(state, 'position', state) 
@@ -396,6 +396,9 @@ class FullLatentGPModel(FullGPModel):
 
     #
     def forward(self, key, params, f):
+        """Sample from the likelihood, given likelihood parameters and latent f.
+
+        """
         return self.likelihood.likelihood(params, f).sample(seed=key)
 
     #
@@ -450,6 +453,14 @@ class FullLatentGPModelRepeatedObs(FullLatentGPModel):
                  mean_fn: Optional[Callable] = None,
                  priors: Dict = None,
                  likelihood: AbstractLikelihood = None):  
+        """Initialize the FullLatentGPModelRepeatedObs model.
+        
+        This is partially a repetition of the FullLatentGP init function, but 
+        with some crucial differences; we store only the unique inputs, and the
+        reverse indices to later repeat f back to the appropriate instances when
+        we evaluate the likelihood.
+
+        """
         if jnp.ndim(X) > 1:
             raise NotImplementedError(f'Repeated input models are only implemented for 1D input, ',
                                       f'but X is of shape {X.shape}')
@@ -479,6 +490,12 @@ class FullLatentGPModelRepeatedObs(FullLatentGPModel):
 
     #
     def forward(self, key, params, f):
+        """Sample from the likelihood, given likelihood parameters and latent f.
+
+        As we are now in 'prediction mode', we do not want to compute reverse
+        indices for f.
+
+        """
         return self.likelihood.likelihood(params, 
                                           f, 
                                           do_reverse=False).sample(seed=key)
