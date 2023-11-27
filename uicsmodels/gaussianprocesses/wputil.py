@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import jax
 
 def vec2tril(v, d):
     m = len(v)
