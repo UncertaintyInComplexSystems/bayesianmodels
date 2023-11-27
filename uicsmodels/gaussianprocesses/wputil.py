@@ -36,3 +36,10 @@ def construct_wishart_Lvec(F, L_vec):
     return construct_wishart(F, L)
 
 #
+def cov2corr(Sigma):
+    v = jnp.sqrt(jnp.diag(Sigma))
+    outer_v = jnp.outer(v, v)
+    correlation = Sigma / outer_v
+    return correlation
+
+#
