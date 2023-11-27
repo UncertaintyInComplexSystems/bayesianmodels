@@ -94,7 +94,7 @@ class BayesianModel(ABC):
             elif mode == 'mcmc-in-smc':
                 kernel_type = sampling_parameters.get('kernel')
                 kernel_parameters = sampling_parameters.get('kernel_parameters')
-                mcmc_step_fn = kernel_type.build_kerel(),
+                mcmc_step_fn = kernel_type.kernel(),
                 mcmc_init_fn = kernel_type.init,
             
             smc = adaptive_tempered_smc(
@@ -151,7 +151,7 @@ class BayesianModel(ABC):
         elif hasattr(self, 'states'):
             return self.states.initial_position
         else:
-            raise NotImplementedError('Please first run inference')
+            return None
 
     #
     def plot_priors(self, axes=None):

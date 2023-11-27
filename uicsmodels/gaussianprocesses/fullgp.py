@@ -477,7 +477,6 @@ class FullLatentGPModelRepeatedObs(FullLatentGPModel):
         self.X = self.X[:, jnp.newaxis] 
         self.y = y
 
-        # self.n = len(self.X)
         if likelihood is None:
             likelihood = Gaussian()
         self.likelihood = RepeatedObsLikelihood(base_likelihood=likelihood,

@@ -107,7 +107,6 @@ def update_correlated_gaussian(key, f_current, loglikelihood_fn_, mean, cov, nd:
     If (nd) is not provided, it is assumed f_current, mean, and cov are of 
     shapes (n, ), (n, ), and (n, n), respectively.
 
-
     """
     if nd is not None:
         num_el = nd[0] * nd[1]

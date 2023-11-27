@@ -16,17 +16,6 @@ from distrax._src.bijectors.bijector import Bijector
 
 jitter = 1e-6
 
-def plot_dist(ax, x, samples, **kwargs):
-    f_mean = jnp.mean(samples, axis=0)
-    f_hdi_lower = jnp.percentile(samples, q=2.5, axis=0)
-    f_hdi_upper = jnp.percentile(samples, q=97.5, axis=0)
-    color = kwargs.get('color', 'tab:blue')
-    ax.plot(x, f_mean, lw=2, **kwargs)
-    ax.fill_between(x.flatten(), f_hdi_lower, f_hdi_upper,
-                    alpha=0.2, lw=0, color=color)
-
-#
-
 def sample_predictive(key: PRNGKey,
                          x: Array,
                          z: Array,
@@ -142,7 +131,7 @@ def update_gaussian_process(key: PRNGKey, f_current: Array, loglikelihood_fn: Ca
                             cov_fn: Callable = jk.RBF(),
                             mean_params: Dict = None,
                             cov_params: Dict = None):
-    n = X.shape[0]
+    n = f_current.shape[0]
     mean = mean_fn.mean(params=mean_params, x=X)
     cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
     if jnp.ndim(f_current) > 1:
@@ -211,6 +200,8 @@ def update_gaussian_process_mean_params(key: PRNGKey,
                                            hyperpriors: Dict = None):
     """Updates the parameters of a Gaussian process mean function.
 
+    TODO: use same tree-flattening approach as for cov_params
+
     """
 
     n = X.shape[0]
@@ -238,6 +229,12 @@ def update_gaussian_process_obs_params(key: PRNGKey, y: Array,
                                        likelihood: AbstractLikelihood = Gaussian(),
                                        obs_params: Dict = None,
                                        hyperpriors: Dict = None):
+    """Updates the parameters of the observation model.
+
+    TODO: use same tree-flattening approach as for cov_params
+
+    """
+    
     def logdensity_fn_(obs_params_):
         log_pdf = 0
         for param, val in obs_params_.items():
