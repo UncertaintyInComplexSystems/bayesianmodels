@@ -190,6 +190,7 @@ class FullLatentWishartModelRepeatedObs(FullLatentWishartModel):
         self.nu = self.D + 1
         self.output_shape = (self.nu, self.D) # nu x d; note that JAX must know the number of elements in this tuple
         X = jnp.squeeze(X)
+        
         # sort observations
         sort_idx = jnp.argsort(X, axis=0)
         X = X[sort_idx]
