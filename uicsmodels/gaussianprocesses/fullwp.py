@@ -1,9 +1,10 @@
 from uicsmodels.bayesianmodels import GibbsState, ArrayTree
 from uicsmodels.gaussianprocesses.gputil import sample_prior
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel
-from uicsmodels.gaussianprocesses.likelihoods import Wishart, WishartRepeatedObs, construct_wishart_Lvec, WishartRepeatedObs
+from uicsmodels.gaussianprocesses.likelihoods import Wishart, WishartRepeatedObs
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.gaussianprocesses.kernels import DefaultingKernel
+from uicsmodels.gaussianprocesses.wputil import construct_wishart_Lvec
 
 from jax import Array
 from jaxtyping import Float
