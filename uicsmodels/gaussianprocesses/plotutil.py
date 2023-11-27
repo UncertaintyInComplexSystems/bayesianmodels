@@ -5,7 +5,8 @@ def plot_dist(ax,
               x, 
               samples, 
               **kwargs):
-    x = x.flatten()
+    if jnp.ndim(x) > 1:
+        x = x.flatten()
     f_mean = jnp.mean(samples, axis=0)
     f_hdi_lower = jnp.percentile(samples, q=2.5, axis=0)
     f_hdi_upper = jnp.percentile(samples, q=97.5, axis=0)
