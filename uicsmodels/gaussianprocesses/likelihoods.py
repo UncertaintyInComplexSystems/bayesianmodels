@@ -131,9 +131,11 @@ class WishartRepeatedObs(Wishart):
             L_vec = params['L_vec']
             L = vec2tril(L_vec, self.d)
             Sigma = construct_wishart(F=f, L=L)
-        mean = params.get('likelihood.mean', jnp.zeros((self.d, )))        
+        mean = params.get('likelihood.mean', jnp.zeros((self.d, )))  
         if do_reverse:
-            Sigma = Sigma[self.inv_i, :, :]
+            C = jax.vmap(jnp.linalg.cholesky, in_axes=0)(Sigma)
+            C = C[self.inv_i, :, :]
+            return dx.MultivariateNormalTri(loc=mean, scale_tri=C)
         return dx.MultivariateNormalFullCovariance(loc=mean,
                                                    covariance_matrix=Sigma)
 
