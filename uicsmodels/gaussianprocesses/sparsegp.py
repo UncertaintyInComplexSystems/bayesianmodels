@@ -84,24 +84,24 @@ class SparseGPModel(FullGPModel):
         cov_XX = self.cov_fn.cross_covariance(
             params=cov_params,
             x=x, y=x) 
-        cov_XX += jitter * jnp.eye(cov_XX.shape[0])
+        cov_XX += jitter * jnp.eye(*cov_XX.shape)
         
         cov_ZZ = self.cov_fn.cross_covariance(
             params=cov_params,
             x=samples_Z, y=samples_Z)
-        cov_ZZ += jitter * jnp.eye(cov_ZZ.shape[0])
+        cov_ZZ += jitter * jnp.eye(*cov_ZZ.shape)
 
         cov_XZ = self.cov_fn.cross_covariance(
             params=cov_params,
             x=x, y=samples_Z)
 
         mean_gp = jnp.dot(cov_XZ, jnp.linalg.solve(cov_ZZ, samples_u))
-        ZZ_ZX = jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ))
 
+        ZZ_ZX = jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ))
         cov_gp = cov_XX - jnp.dot(cov_XZ, ZZ_ZX)
 
         if add_jitter:
-            cov_gp += jitter * jnp.eye(cov_gp.shape[0])
+            cov_gp += jitter * jnp.eye(*cov_gp.shape)
 
         return mean_gp, cov_gp
 
@@ -240,45 +240,63 @@ class SparseGPModel(FullGPModel):
 
         """
     
-        # get current hypter-parameters from gibbs-state
+        # get current hypter-parameters and samples from gibbs-state
         position = state.position.copy()
 
+        # define likelihood function
+        # NOTE: The function might use old parameter values if they are updated.
+        #   That means the u update uses an outdated likelihood...
+        #   - Either do the likelihood update at the end
+        #   - or use a location function that returns an updated likelihood function. 
         likelihood_params = position.get('likelihood', {})
-        cov_params = position.get('kernel', {}) 
-
-        """Sample the latent GP using:
-
-        p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
-
-        """
-
-        # update f
-        mean, cov = self._compute_sparse_gp(
-                    cov_params=cov_params, 
-                    x=self.X,
-                    samples_Z=position['Z'], 
-                    samples_u=position['u'],
-                    add_jitter=True)
-
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(
-            self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
+                self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
+        
+        def sample_f(key, position): # -> jrnd.key, gibbs_state
+            """Sample the latent GP using:
 
-        key, subkey = jrnd.split(key)
-        # TODO: New version uses update_gaussian_process
-        position['f'], f_info = update_correlated_gaussian(
-            subkey, 
-            position['f'], 
-            loglikelihood_fn_, 
-            mean, cov)
+            p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
+
+            """
+            cov_params = position.get('kernel', {}) 
+
+            # update f
+            mean, cov = self._compute_sparse_gp(
+                        cov_params=cov_params, 
+                        x=self.X,
+                        samples_Z=position['Z'], 
+                        samples_u=position['u'],
+                        add_jitter=True)
+
+            # key, subkey = jrnd.split(key)
+            # sub_state = dx.MultivariateNormalFullCovariance(
+            #     mean, 
+            #     cov).sample(seed=subkey, sample_shape=1).flatten()
+            # jax.debug.print('new f {d}', d=sub_state.shape)
+
+            key, subkey = jrnd.split(key)
+            sub_state, f_info = update_correlated_gaussian(
+                subkey, 
+                position['f'], 
+                loglikelihood_fn_, 
+                mean, cov)
+            #jax.debug.print('old f {d}', d=sub_state.shape)
+            
+            return key, sub_state  # TODO: Don't return key, e.g. splitting needs to happen outside of function.
+        
+        key, position['f'] = sample_f(key, position)
+
 
         # update cov parameters 
         # if len(cov_params):  # theta
-        if True:  # HACK: Deactivated cov update
+        if True:
             """Sample parameters of the kernel function using: 
 
             p(theta | u, Z, f, X) \propto 
                 p(f | u, Z, theta, X) p(u | Z, theta) p(theta)
             """
+
+            cov_params = position.get('kernel', {})
 
             def logdensity_fn_(theta_):
                 log_pdf = 0
@@ -316,54 +334,31 @@ class SparseGPModel(FullGPModel):
                 cov_params, 
                 stepsize=mcmc_parameters.get(
                     'stepsizes', 
-                    dict()).get('kernel', 0.1))  # NOTE: original was 0.1
+                    dict()).get('kernel', 0.1))
 
             position['kernel'] = sub_state
         
-        # update likelihood
-        if True:
-            """Sample parameters of the likelihood using: 
-
-            p(\phi | y, f) \propto p(y | f, phi)p(phi)
-
-            """
-
-            def logdensity_fn_(phi_):
-                log_pdf = 0
-                for param, val in phi_.items():
-                    log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
-                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
-                return log_pdf
-
-            #
-            key, subkey = jrnd.split(key)
-            sub_state, sub_info = update_metropolis(subkey, logdensity_fn_, likelihood_params, 
-                                                    stepsize=mcmc_parameters.get('stepsizes', dict()).get('likelihood', 0.1))
-            position['likelihood'] = sub_state
-        
         # update Z  # TODO: needs to be adapted to changes in code-base after merge with main
-        if False:
-            Z_params = self.__get_component_parameters(
-                position, 
-                'inducing_inputs_Z')
+        if True:
+            # Z_params = self.__get_component_parameters(
+            #     position, 
+            #     'inducing_inputs_Z')
+            Z_params = position.get('inducing_inputs_Z', {})
 
             # Get updated cov. parameters und u samples
-            mean_params = self.__get_component_parameters(position, 'mean')
-            cov_params = self.__get_component_parameters(position, 'kernel')
+            # mean_params = self.__get_component_parameters(position, 'mean')
+            # cov_params = self.__get_component_parameters(position, 'kernel')
+            cov_params = position.get('kernel', {})
 
             def logdensity_fn_(Z_):
-                curr_Z = Z_['Z']
+                curr_Z = Z_
 
                 log_pdf = 0
         
                 # P(Z)
-                tmp = jnp.sum(dx.Normal(
+                log_pdf += jnp.sum(dx.Normal(
                     loc=Z_params['mean'],
                     scale=Z_params['scale']).log_prob(curr_Z))
-                log_pdf += tmp
-                '''jax.debug.print(
-                    "🧐 P(Z) (log)density: {logd} {d}", 
-                    logd = tmp, d=jnp.exp(tmp))'''
 
                 # p(f | u, Z, theta, X)
                 mean_gp, cov_gp = self._compute_sparse_gp(
@@ -372,29 +367,18 @@ class SparseGPModel(FullGPModel):
                     samples_Z=curr_Z,
                     samples_u=position['u'])
                 cov_gp += jitter * jnp.eye(self.n)
-                tmp = dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position['f'])
-
-                log_pdf += tmp
-                '''jax.debug.print(
-                    "🧐 f (log)density: {logd} {d}", 
-                    logd = tmp, d=jnp.exp(tmp))'''
+                log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position['f'])
 
                 # p(u | Z, theta)
-                mean_u = self.mean_fn.mean(params=mean_params, x=curr_Z)
+                mean_u = self.mean_fn.mean(params=None, x=curr_Z)
                 cov_u = self.cov_fn.cross_covariance(
                     params=cov_params,
                     x=curr_Z,
                     y=curr_Z)
                 cov_u += jitter * jnp.eye(curr_Z.shape[0])
-                tmp = dx.MultivariateNormalFullCovariance(
+                log_pdf += dx.MultivariateNormalFullCovariance(
                     mean_u, 
                     cov_u).log_prob(position['u'])
-                log_pdf += tmp
-                '''jax.debug.print(
-                    "🧐 u (log)density: {logd} {d}", 
-                    logd = tmp, d=jnp.exp(tmp))
-                
-                jax.debug.print('---------------------\n')'''
 
                 return log_pdf
 
@@ -404,13 +388,14 @@ class SparseGPModel(FullGPModel):
                 logdensity_fn_, 
                 # NOTE: Packing Z samples into dict for metropolis update
                 # how does that work for other variables? -> They get a whole gibbs_state
-                {'Z': position['Z']},  
+                position['Z'],  
                 stepsize=mcmc_parameters.get(
                     'stepsizes', 
                     dict()).get('kernel', 0.1))
             
-            for param, val in sub_state.items():  # HACk: deactivated Z
-                position[param] = val
+            position['Z'] = sub_state
+
+        # jax.debug.print('z {z}', z=position['Z'])
 
         # update u 
         if True:
@@ -439,7 +424,33 @@ class SparseGPModel(FullGPModel):
                 position['u'], 
                 loglikelihood_fn_, 
                 mean_u, cov_u)
-        
+
+        # update likelihood
+        if True:
+            """Sample parameters of the likelihood using: 
+
+            p(\phi | y, f) \propto p(y | f, phi)p(phi)
+
+            """
+
+            def logdensity_fn_(phi_):
+                log_pdf = 0
+                for param, val in phi_.items():
+                    log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
+                log_pdf += temperature*jnp.sum(self.likelihood.log_prob(params=phi_, f=position['f'], y=self.y))
+                return log_pdf
+
+            #
+            key, subkey = jrnd.split(key)
+            sub_state, sub_info = update_metropolis(
+                subkey, 
+                logdensity_fn_, 
+                likelihood_params, 
+                stepsize=mcmc_parameters.get(
+                    'stepsizes', dict()
+                    ).get('likelihood', 0.1))
+            
+            position['likelihood'] = sub_state
 
         return GibbsState(position=position), None 
             # We return None to satisfy SMC; this needs to be filled with acceptance information
