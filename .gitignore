@@ -79,7 +79,7 @@ venv.bak/
 
 # others
 data
-results/
+results
 environment.yml.bak
 *.pkl
 .DS_Store
