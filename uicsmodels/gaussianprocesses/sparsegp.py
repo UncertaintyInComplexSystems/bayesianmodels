@@ -268,12 +268,14 @@ class SparseGPModel(FullGPModel):
                         samples_u=position['u'],
                         add_jitter=True)
 
+            # sample f directly
             # key, subkey = jrnd.split(key)
             # sub_state = dx.MultivariateNormalFullCovariance(
             #     mean, 
             #     cov).sample(seed=subkey, sample_shape=1).flatten()
             # jax.debug.print('new f {d}', d=sub_state.shape)
-
+            
+            # sample f with ellipical slice sampling
             key, subkey = jrnd.split(key)
             sub_state, f_info = update_correlated_gaussian(
                 subkey, 

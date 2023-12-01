@@ -2,8 +2,12 @@
 
 import os
 import argparse
+import datetime
+
 
 if __name__ == '__main__':
+    
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-gpu', dest='GPU', type=int)
     args =  parser.parse_args()

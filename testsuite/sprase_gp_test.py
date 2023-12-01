@@ -2,12 +2,13 @@ import os
 import sys
 import datetime
 import logging
+import pickle
+import csv
 from timeit import default_timer as timer
 
+import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-import numpy as np
 
 import jax
 from jax.config import config
@@ -53,13 +54,14 @@ def plt_stylelize():
 plt_stylelize()
 
 def setup_results_folder_and_logging(
-        static_folder=False, 
-        log_level=logging.DEBUG, 
-        subfolders=None):
+        root_folder=False, 
+        sub_folders=None,
+        id=None,
+        log_level=logging.DEBUG):
     """_summary_
 
     Args:
-        - static_folder (bool, optional): creates unique folder based on date and time if False, if true the folder is named 'debug'. Defaults to False.
+        - root_folder (string): root folder of experiment
         - log_level (_type_, optional): _description_. Defaults to logging.DEBUG.
         - sub_folder (list(string), optional): creates additional sub_folder if not empty. Defaults to None.
 
@@ -67,14 +69,10 @@ def setup_results_folder_and_logging(
         string: relative filepath
     """
 
-    # create unique folder for log files and other output
-    timestamp = 'debug' if static_folder else datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    path = f'./results_sparseGP/{timestamp}/'
-
     # create subfolders
     paths_sub = []
-    for folder in subfolders:
-        paths_sub.append(path + f'seed_{folder}/')
+    for folder in sub_folders:
+        paths_sub.append(root_folder + f'{folder}/')
         os.makedirs(paths_sub[-1], exist_ok = True)
 
     # disable logging of other modules
@@ -84,17 +82,15 @@ def setup_results_folder_and_logging(
     # setup logging to file and stdout
     logging.basicConfig(
         handlers=[
-            logging.FileHandler(path + 'log.log'), 
+            logging.FileHandler(root_folder + f'{id}.log'), 
             logging.StreamHandler(sys.stdout)],
         encoding='utf-8', level=log_level,
         format="%(asctime)s [%(levelname)s] %(message)s")
     
     # log a first entry
     logging.info('Hello cruel world.')
-    if static_folder:
-        logging.warning('using debug logging folder. Files might be overwritten!')
 
-    return path, paths_sub
+    return paths_sub
 
 
 
@@ -280,6 +276,100 @@ def plot_smc(x, y, particles, ground_truth, title, folder):
         title=title+f'\nposterior inducing points $Z$')
 
 
+def plot_predictive_f(key, x, y, f_true, predictive_fn, x_pred, title, folder):
+    _, key_pred = jrnd.split(key)
+    
+    f_pred = predictive_fn(key_pred, x_pred)
+
+    # setup plotting
+    fig, axes = plt.subplots(
+        nrows=2, ncols=1, figsize=(12, 7), sharex=True,
+        sharey=True, constrained_layout=True)
+
+    # plot each particle
+    num_particles = f_pred.shape[0]
+    ax = axes[0]
+    for i in jnp.arange(0, num_particles, step=10):
+        ax.plot(
+            x_pred, f_pred[i, :], 
+            alpha=0.1, color='tab:blue', zorder=2)
+
+    # mean and HDI over particles
+    ax = axes[1]
+    f_mean = jnp.mean(f_pred, axis=0)
+    f_hdi_lower = jnp.percentile(f_pred, q=2.5, axis=0)
+    f_hdi_upper = jnp.percentile(f_pred, q=97.5, axis=0)
+    ax.plot(
+        x_pred, f_mean, 
+        color='tab:blue', lw=2, zorder=2, alpha=0.3,
+        label='f mean')
+    ax.fill_between(
+        x_pred, f_hdi_lower, f_hdi_upper,
+        alpha=0.2, color='tab:blue', lw=0)
+
+    # True f, observations and others for all axis
+    for ax in axes.flatten():
+        ax.plot(x, f_true, 'k', label=r'$f$', zorder=-1, alpha=0.5)
+        ax.plot(x, y, 'x', label='obs', color='black', alpha=0.5)
+        # ax.set_xlim([-10, 10])
+        ax.set_ylim([-5., 5.])
+        ax.set_xlabel(r'$x$')
+        ax.legend()
+
+    axes[0].set_title('SMC particles', fontsize=12)
+    axes[1].set_title('Posterior 95% HDI', fontsize=12)
+    fig.suptitle(title, fontsize=15)
+    plt.savefig(
+            f'./{folder}/' + title.replace(' ', '_').replace('\n', '_').replace('$', ''))
+    plt.close()
+    #axes[0].set_ylabel('Latent GP', rotation=0, ha='right');
+
+
+
+
+def summary_stats_from_log(path_logfile):
+    # parse log-file
+    import ast
+
+    def extract_single_dict_entris_from_log(file_path, var_name):
+        file = open(file_path,'r')
+
+        results = []
+        while True:
+            next_line = file.readline()
+            if not next_line:
+                break
+            curr_line = next_line.strip()
+
+            if var_name in curr_line:
+                # get message from log entry
+                d = curr_line.split('[INFO]')[-1].strip()
+                # generate dict from message
+                dict = ast.literal_eval(d)
+                results.append(dict.get(var_name))
+        
+        file.close()
+        return results
+
+    exec_times = extract_single_dict_entris_from_log(
+        path_logfile, 'execution_time_sec')
+    mse = extract_single_dict_entris_from_log(
+        path_logfile, 'mean_squared_error')
+    
+    summary_stats = dict(
+        execution_time=dict(
+            mean = np.mean(exec_times),
+            variance = np.var(exec_times)
+            ),
+        mean_squared_error=dict(
+            mean = np.mean(mse),
+            variance = np.var(mse)
+            ),
+        )
+    
+    return summary_stats
+
+
 def sparse_gp_inference(seed, path):
     key = jrnd.PRNGKey(seed)
 
@@ -290,8 +380,8 @@ def sparse_gp_inference(seed, path):
     model_parameter = dict(
         num_inducing_points = 20)
     sampling_parameter = dict(  # SMC parameter
-        num_particles = 10,
-        num_mcmc_steps = 2)
+        num_particles = 2,
+        num_mcmc_steps = 1)
     logging.info(f'model parameter: {model_parameter}')
     logging.info(f'sampling parameter: {sampling_parameter}')
 
@@ -325,6 +415,7 @@ def sparse_gp_inference(seed, path):
         num_inducing_points=model_parameter['num_inducing_points'])  
 
     # inference
+    logging.info('run inference')
     key, key_inference = jrnd.split(key)
     start = timer()
     with jax.disable_jit(disable=False):
@@ -332,34 +423,91 @@ def sparse_gp_inference(seed, path):
             key_inference, 
             mode='gibbs-in-smc', 
             sampling_parameters=sampling_parameter)
-    logging.info(f'execution time: {(timer() - start):9.3f} seconds')
+    logging.info(
+        '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
     
     # plot results
+    logging.info('generate plots')
     sub_title = ''
     plot_smc(
         x, y, particles.particles, ground_truth, 
         title=f'Sparse GP' + sub_title,
         folder=path)
+    plot_predictive_f(
+        key, x, y, ground_truth.get('f'),
+        predictive_fn=gp_sparse.predict_f,
+        x_pred=jnp.linspace(-0.5, 1.5, num=150),
+        title='Sparse GP\npredictive f',
+        folder=path)
+    plot_predictive_f(
+        key, x, y, ground_truth.get('f'),
+        predictive_fn=gp_sparse.predict_f_from_u,
+        x_pred=jnp.linspace(-0.5, 1.5, num=150),
+        title='Sparse GP\npredictive f from u',
+        folder=path)
     
-    # TODO: pickle data and infernece output for combining the results later
+    # pickle data and infernece output for combining the results later
+    logging.info('pickle data and inference output')
+    to_pickle = dict(
+        x = x,
+        y = y,
+        ground_truth = ground_truth,
+        initial_particles = initial_particles,
+        particles = particles,
+        marginal_likelihood=marginal_likelihood)
+    for dkey in to_pickle:
+        logging.debug('pickle ' + path+f'{dkey}.pickle')
+        with open(path+f'{dkey}.pickle', 'wb') as file_handle:
+            pickle.dump(
+                to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # compute mean squared error between f particle mean and true f
+    def mse(approx, true):
+        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+
+    mse = mse(jnp.mean(particles.particles['f'], axis=0), ground_truth.get('f'))
+    logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
     
 
 def main():
-    num_runs = 3
+    # create unique folder name for log files and other output
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+    path = f'./results_sparse_gp_test/{timestamp}/'
 
+    # parameters and random seeds  
+    #    TODO: seed random random seed generator
+    num_runs = 3
     random_random_seeds = np.random.randint(0, 10000 + 1, num_runs)
 
-    # setup results folder and logging
-    path, paths_sub = setup_results_folder_and_logging(
-        static_folder=True, 
-        log_level=logging.DEBUG,
-        subfolders=random_random_seeds)
+    # run sparse gp
+    id = 'sparseGP'
+    ## setup results folder and logging
+    sub_folders = [f'{id}_seed_{s}' for s in random_random_seeds]
+    paths = setup_results_folder_and_logging(
+        root_folder = path, 
+        sub_folders = sub_folders,
+        id = id,
+        log_level = logging.INFO)
+    logging.info(f'experiment id: {id}')
+    logging.info(f'number_runs: {num_runs}')
     
+    ## inference for each seed
     for i in range(num_runs):
-        logging.info(f'sparse GP run {i}')
-        sparse_gp_inference(random_random_seeds[i], path=paths_sub[i])
+        logging.info('')  # intentionally left blank
+        logging.info(f'run: {i}')
+        sparse_gp_inference(random_random_seeds[i], path=paths[i])
+
+    ## summary stats
+    summary_stats = summary_stats_from_log(path + id + '.log')
+    logging.info(f'summary_stats: {summary_stats}')
+
+    print(f'\n{id} | summary stats')
+    for var in summary_stats:
+        print(f' {var}')
+        for stat in summary_stats[var]:
+            print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
 
 
-    # TODO: less smooth data, e.g. box car
-    # TODO: add full or marginal latent gp
-    # TODO: run over multiple seeds
+    # run latent gp
+    id = 'latentGP'
+    #   TODO: add full or marginal latent gp, either is fine as switching is easy
