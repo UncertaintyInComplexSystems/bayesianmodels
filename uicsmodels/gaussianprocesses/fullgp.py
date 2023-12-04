@@ -16,6 +16,7 @@ from distrax._src.bijectors.bijector import Bijector
 
 import jax
 import distrax as dx
+import jaxkern as jk
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
@@ -27,18 +28,21 @@ jitter = 1e-6
 
 class FullGPModel(BayesianModel):
 
-    def __init__(self, X, y,
-                 cov_fn: Optional[Callable],
+    def __init__(self, X, y: Optional[Array]=None,
+                 cov_fn: Optional[Callable]=None,
                  mean_fn: Callable = None,
                  priors: Dict = None,
                  duplicate_input=False):
         if jnp.ndim(X) == 1:
-            X = X[:, jnp.newaxis]        
+            X = X[:, jnp.newaxis]   
+        if cov_fn is None:
+            cov_fn = jk.RBF()     
         # Validate arguments
-        if X.shape[0] > len(y):
+        if y is not None and X.shape[0] > len(y):
             raise ValueError(
                 f'X and y should have the same leading dimension, '
-                f'but X has shape {X.shape} and y has shape {y.shape}')
+                f'but X has shape {X.shape} and y has shape {y.shape}.',
+                f'Use the `FullLatentGPModelRepeatedObs` model for repeated inputs.')
         self.X, self.y = X, y        
         self.n = self.X.shape[0]        
         if mean_fn is None:
@@ -56,46 +60,19 @@ class FullGPModel(BayesianModel):
         raise NotImplementedError
 
     #
-    def init_fn(self, key: Array, num_particles: int = 1):
-        """Initial state for MCMC/SMC.
-
-        This function initializes all highest level latent variables. Children
-        of this class need to implement initialization of intermediate latent
-        variables according to the structure of the hierarchical model.
-
-        Args:
-            key: PRNGKey
-            num_particles: int
-                Number of particles to initialize a state for
-        Returns:
-            GibbsState
-
-        """
-
-        priors_flat, priors_treedef = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
-        samples = list()
-        for prior in priors_flat:
-            key, subkey = jrnd.split(key)
-            samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
-
-        initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples)
-        return GibbsState(position=initial_position)
-
-    #
-    def gibbs_fn(self, key: PRNGKey, state: GibbsState, **kwars):
-        raise NotImplementedError
-    
-    #
     def loglikelihood_fn(self) -> Callable:
-        raise NotImplementedError
-    
-    #
-    def logprior_fn(self) -> Callable:
         raise NotImplementedError
     
     #
     def plot_priors(self, axes=None):
         raise NotImplementedError
+
+    #
+    def inference(self, key: PRNGKey, mode='gibbs-in-smc', sampling_parameters: Dict = None):
+        if not hasattr(self, 'y'):
+            raise ValueError(f'Cannot perform inference on a GP model without',
+                             f'providing observed responses y.')
+        return super().inference(key, mode, sampling_parameters)
 
     #
     
@@ -127,8 +104,8 @@ class FullLatentGPModel(FullGPModel):
 
     """
 
-    def __init__(self, X, y,
-                 cov_fn: Callable,
+    def __init__(self, X, y: Optional[Array] = None,
+                 cov_fn: Optional[Callable] = None,
                  mean_fn: Optional[Callable] = None,
                  priors: Dict = None,
                  likelihood: AbstractLikelihood = None,
@@ -296,7 +273,7 @@ class FullLatentGPModel(FullGPModel):
 
         def loglikelihood_fn_(state: GibbsState) -> Float:
             position = getattr(state, 'position', state)
-            phi = state.get('likelihood', {})
+            phi = position.get('likelihood', {})
             f = position['f']
             log_pdf = jnp.sum(self.likelihood.log_prob(params=phi, f=f, y=self.y))
             return log_pdf
@@ -525,8 +502,8 @@ class FullMarginalGPModel(FullGPModel):
 
     """
 
-    def __init__(self, X, y,
-                 cov_fn: Optional[Callable],
+    def __init__(self, X, y: Optional[Array] = None,
+                 cov_fn: Optional[Callable] = None,
                  mean_fn: Callable = None,
                  priors: Dict = None,
                  **kwargs):
@@ -534,35 +511,7 @@ class FullMarginalGPModel(FullGPModel):
         super().__init__(X, y, cov_fn, mean_fn, priors, **kwargs)        
 
     #
-    def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
-        """The Gibbs MCMC kernel.
-
-        The Gibbs kernel step function takes a state and returns a new state. In
-        the latent GP model, the latent GP (f) is first updated, then the
-        parameters of the mean (psi) and covariance function (theta), and lastly
-        the parameters of the observation model (phi).
-
-        Args:
-            key:
-                The jax.random.PRNGKey
-            state: GibbsState
-                The current state in the MCMC sampler
-        Returns:
-            GibbsState
-
-        """
-
-        position = state.position.copy()
-
-        loglikelihood_fn_ = self.loglikelihood_fn()
-        logprior_fn_ = self.logprior_fn()
-
-        logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-        new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.01))
-
-        return GibbsState(position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
-
-    #
+    
     def loglikelihood_fn(self) -> Callable:
         """Returns the log-likelihood function for the model given a state.
 
@@ -578,9 +527,9 @@ class FullMarginalGPModel(FullGPModel):
         def loglikelihood_fn_(state: GibbsState) -> Float:
             position = getattr(state, 'position', state)
             psi = {param: position[param] for param in self.param_priors['mean']} if 'mean' in self.param_priors else {}
-            psi = state.get('mean', {})
-            theta = state['kernel']
-            sigma = state['likelihood']['obs_noise']
+            psi = position.get('mean', {})
+            theta = position['kernel']
+            sigma = position['likelihood']['obs_noise']
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
             cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
@@ -590,29 +539,6 @@ class FullMarginalGPModel(FullGPModel):
 
         #
         return loglikelihood_fn_
-
-    #
-    def logprior_fn(self) -> Callable:
-        """Returns the log-prior function for the model given a state.
-
-        Args:
-            None
-        Returns:
-            A function that computes the log-prior of the model given a state.
-
-        """
-
-        def logprior_fn_(state: GibbsState):
-            position = getattr(state, 'position', state)
-            logprob = 0
-            priors_flat, _ = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
-            values_flat, _ = tree_flatten(position)
-            for value, dist in zip(values_flat, priors_flat):
-                logprob += jnp.sum(dist.log_prob(value))
-            return logprob
-
-        #
-        return logprior_fn_
 
     #
     def predict_f(self, key: Array, x_pred: ArrayTree, num_subsample=-1):
