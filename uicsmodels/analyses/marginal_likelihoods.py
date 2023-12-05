@@ -3,6 +3,9 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrnd
 
+import jaxopt
+from jaxopt.tree_util import tree_map
+
 from jax.scipy.special import logsumexp
 from jax.tree_util import tree_flatten, tree_unflatten
 from distrax._src.distributions.distribution import Distribution
@@ -14,7 +17,7 @@ from typing import Callable, Dict
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState
 
 
-def iid_likelihood(L):
+def iid_likelihood(L: Callable):
     """
     
     We typically have multiple observations and assume the likelihood factorizes 
@@ -26,13 +29,11 @@ def iid_likelihood(L):
     return lambda x: jnp.sum(L()(x))
 
 #
-
-
 def naive_monte_carlo(key, 
                       model: BayesianModel, 
                       num_prior_draws: int = 1_000, 
                       num_chunks: int = 5,
-                      iid_obs=True) -> Float:   
+                      iid_obs: bool = True) -> Float:   
     """The Naive Monte Carlo (NMC) estimator
 
     The marginal likelihood is defined by 
@@ -77,7 +78,7 @@ def importance_sampling(key,
                         model: BayesianModel, 
                         g_IS: Distribution,
                         num_samples: int = 1_000,
-                        iid_obs=True) -> Float:
+                        iid_obs: bool = True) -> Float:
     
     """Importance sampling routine for a given BayesianModel.
 
@@ -138,3 +139,74 @@ def importance_sampling(key,
     return logsumexp(adjusted_likelihoods) - jnp.log(num_samples)
 
 #
+def laplace_approximation(key,
+                          model: BayesianModel,
+                          iid_obs: bool= True,
+                          **opt_args):
+
+    """Compute the Laplace approximation of the log marginal likelihood of model
+
+    The Laplace approximation approximates the posterior density of the model 
+    with a Gaussian, centered at the mode of the density and with its curvature
+    determined by the Hessian matrix of the negative log posterior density.
+
+    The marginal likelihood of this proxy distribution is known in closed-form,
+    and is used to approximate the actual marginal likelihood.
+
+    See https://en.wikipedia.org/wiki/Laplace%27s_approximation
+
+    """
+
+    # The objective function is the unnormalized posterior
+    @jax.jit
+    def fun(x):
+        return -1.0 * (loglikelihood_fn(x) + logprior_fn(x))
+
+    #
+    if iid_obs:
+        loglikelihood_fn = iid_likelihood(model.loglikelihood_fn)
+    else:
+        loglikelihood_fn = model.loglikelihood_fn
+    logprior_fn = model.logprior_fn()
+
+    # For some models, the parameters are bounded
+    if 'bounds' in opt_args:
+        solver = jaxopt.ScipyBoundedMinimize(fun=fun)
+    else:
+        solver = jaxopt.ScipyMinimize(fun=fun)
+    
+    # Get initial values in the same PyTree structure as the model expects
+    init_params = tree_map(jnp.asarray, 
+                           model.sample_from_prior(key, 
+                                                   num_samples=1))
+    
+    # Derive the number of parameters
+    D = 0
+    vars_flattened, _ = tree_flatten(init_params)
+    for varval in vars_flattened:
+        D += varval.shape[0] if varval.shape else 1
+
+    # Compute MAP
+    sol = solver.run(init_params, **opt_args)   
+
+    # We fit a Gaussian(\hat{\theta}, \Sigma) with 
+    # \hat{\theta} = \argmax_\theta p(\theta \mid y)
+    # \Sigma^-1 is the Hessian of -\log p(\theta \mid y) at \theta=\hat{\theta}
+
+    mode = sol.params
+    H = jax.hessian(fun)(mode)
+    h, _ = tree_flatten(H)
+    if D > 1:
+        S = jnp.squeeze(jnp.linalg.inv(jnp.reshape(jnp.asarray(h), 
+                                                   newshape=(D, D))))
+        _, logdet = jnp.linalg.slogdet(S)
+    else: 
+        S = 1.0 / jnp.squeeze(jnp.asarray(h))
+        logdet = jnp.log(S)
+
+    log_posterior = -1.0 * sol.state.fun_val
+    lml = log_posterior + 1/2*logdet + D/2 * jnp.log(2*jnp.pi)
+    return lml
+
+#
+
