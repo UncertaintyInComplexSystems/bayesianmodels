@@ -1,3 +1,17 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params, update_gaussian_process_obs_params
@@ -6,7 +20,7 @@ from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussia
 
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
+# from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 from jax.tree_util import tree_flatten, tree_unflatten
@@ -21,6 +35,8 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
 from blackjax import elliptical_slice, rmh
+
+__all__ = ['FullGPModel', 'FullLatentGPModel', 'FullLatentGPModelRepeatedObs', 'FullMarginalGPModel']
 
 
 jitter = 1e-6

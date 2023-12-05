@@ -1,3 +1,20 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+from uicsmodels.gaussianprocesses.wputil import vec2tril, tril2vec, construct_wishart
+
 from abc import ABC, abstractmethod
 import jax.numpy as jnp
 import jax.scipy as jsp
@@ -11,7 +28,14 @@ ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 from distrax._src.distributions.distribution_from_tfp import distribution_from_tfp
 from tensorflow_probability.substrates import jax as tfp
 
-from uicsmodels.gaussianprocesses.wputil import vec2tril, tril2vec, construct_wishart
+__all__ = ['AbstractLikelihood', 
+           'RepeatedObsLikelihood', 
+           'Gaussian', 
+           'Wishart',
+           'WishartRepeatedObs',
+           'Bernoulli', 
+           'Poisson']
+
 
 def inv_probit(x) -> Float:
     """Compute the inverse probit function.
@@ -173,3 +197,4 @@ class Poisson(AbstractLikelihood):
         return distribution_from_tfp(tfp.distributions.Poisson(rate=self.link_function(f)))
 
     #
+#

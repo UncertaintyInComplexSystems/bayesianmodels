@@ -1,3 +1,17 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from uicsmodels.bayesianmodels import GibbsState, ArrayTree
 from uicsmodels.gaussianprocesses.gputil import sample_prior
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel
@@ -6,23 +20,27 @@ from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.gaussianprocesses.kernels import DefaultingKernel
 from uicsmodels.gaussianprocesses.wputil import construct_wishart_Lvec
 
+import jax
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
+# from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 from jax.tree_util import tree_flatten, tree_unflatten
-
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
 from copy import deepcopy
-import jax
+
 import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
+
+
+__all__ = ['FullLatentWishartModel', 'FullLatentWishartModelRepeatedObs']
+
 
 def cov_default_recursive(cov_fn, defaults = None):
     if hasattr(cov_fn, 'kernel_set'):

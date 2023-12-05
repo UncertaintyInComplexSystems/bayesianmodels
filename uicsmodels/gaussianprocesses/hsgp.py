@@ -1,6 +1,25 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
+from uicsmodels.gaussianprocesses.meanfunctions import Zero
+from uicsmodels.bayesianmodels import GibbsState, BayesianModel
+from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params
+
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
+# from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
@@ -15,13 +34,30 @@ from jax.tree_util import tree_flatten, tree_unflatten
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
-
-from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
-from uicsmodels.gaussianprocesses.meanfunctions import Zero
-from uicsmodels.bayesianmodels import GibbsState, BayesianModel
-from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params
+__all__ = ['FullLatentHSGPModel']
 
 class FullLatentHSGPModel(BayesianModel):
+
+    """A Gaussian process model for heteroskedastic noise.
+
+    In this model, the observation noise of a Gaussian likelihood is itself
+    assumed to follow a (transformed) Gaussian process. The generative model is
+    based on the model by Benton et al. (2022). In brief, it is defined as 
+    follows:
+
+    v ~ GP(0, k_v)
+    f ~ GP(0, k_f)
+    \sigma_i = sqrt(exp(v(x_i)))
+    y_i  ~ N(f(x_i), \sigma_i)
+
+
+    Benton, G., Maddox, W. J., & Wilson, A. G. (2022). Volatility based kernels 
+    and moving average means for accurate forecasting with Gaussian processes. 
+    http://arxiv.org/abs/2207.06544
+
+
+
+    """
 
     def __init__(self, X, y,
                  cov_fns: Dict = None,
@@ -43,22 +79,7 @@ class FullLatentHSGPModel(BayesianModel):
             likelihood = Gaussian()
         self.likelihood = likelihood
 
-    #
-    # def get_component_parameters(self, position, component):
-    #     """Extract parameter sampled values per model component for current
-    #     position.
-
-    #     """
-    #     if component.startswith('kernel_'):
-    #         return {param: position[f'{component}.{param}'] for param in
-    #             self.param_priors[component]} if component in self.param_priors else {}
-    #     if component.startswith('mean_'):
-    #         return {param: position[f'{component}.{param}'] for param in
-    #             self.param_priors[component]} if component in self.param_priors else {}
-    #     return {param: position[param] for param in
-    #             self.param_priors[component]} if component in self.param_priors else {}
-
-    # #
+    # 
     def init_fn(self, key: PRNGKey, num_particles=1):
         
         initial_position = dict()
