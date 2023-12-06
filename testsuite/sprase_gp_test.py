@@ -382,8 +382,8 @@ def sparse_gp_inference(seed, path):
     model_parameter = dict(
         num_inducing_points = 20)
     sampling_parameter = dict(  # SMC parameter
-        num_particles = 500,
-        num_mcmc_steps = 10)
+        num_particles = 1000,
+        num_mcmc_steps = 50)
     logging.info(f'model parameter: {model_parameter}')
     logging.info(f'sampling parameter: {sampling_parameter}')
 
@@ -476,9 +476,11 @@ def sparse_gp_inference(seed, path):
     
 
 def main():
+    note = f'freeZ_20-inducing'
+
     # create unique folder name for log files and other output
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    path = f'./results_sparse_gp_test/samplingF_{timestamp}/'
+    path = f'./results_sparse_gp_test/{timestamp}_samplingF_{note}/'
 
     # parameters and random seeds  
     num_runs = 3
@@ -494,9 +496,8 @@ def main():
         sub_folders = sub_folders,
         id = id,
         log_level = logging.INFO)
-    logging.info(f'experiment id: {id}')
+    logging.info(f'experiment id: {id} | {note}')
     logging.info(f'number_runs: {num_runs}')
-    logging.info(f'note: fixed z, ellipical slice f')
     
     ## inference for each seed
     for i in range(num_runs):
