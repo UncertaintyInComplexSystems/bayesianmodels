@@ -28,6 +28,7 @@ tfb = tfp.bijectors
 from uicsmodels.gaussianprocesses.sparsegp import SparseGPModel
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
 
+# optional package for debugging
 from icecream import ic
 ic.configureOutput(includeContext=True)
 
@@ -276,15 +277,16 @@ def plot_smc(x, y, particles, ground_truth, title, folder):
         title=title+f'\nposterior inducing points $Z$')
 
 
-def plot_predictive_f(key, x, y, f_true, predictive_fn, x_pred, title, folder):
+def plot_predictive_f(key, x, y, x_true, f_true, predictive_fn, x_pred, title, folder):
     _, key_pred = jrnd.split(key)
     
     f_pred = predictive_fn(key_pred, x_pred)
 
     # setup plotting
     fig, axes = plt.subplots(
-        nrows=2, ncols=1, figsize=(12, 7), sharex=True,
-        sharey=True, constrained_layout=True)
+        nrows=2, ncols=1, figsize=(12, 7), 
+        sharex=True, sharey=True, 
+        constrained_layout=True)
 
     # plot each particle
     num_particles = f_pred.shape[0]
@@ -302,15 +304,15 @@ def plot_predictive_f(key, x, y, f_true, predictive_fn, x_pred, title, folder):
     ax.plot(
         x_pred, f_mean, 
         color='tab:blue', lw=2, zorder=2, alpha=0.3,
-        label='f mean')
+        label='posterior f')
     ax.fill_between(
         x_pred, f_hdi_lower, f_hdi_upper,
         alpha=0.2, color='tab:blue', lw=0)
 
     # True f, observations and others for all axis
     for ax in axes.flatten():
-        ax.plot(x, f_true, 'k', label=r'$f$', zorder=-1, alpha=0.5)
-        ax.plot(x, y, 'x', label='obs', color='black', alpha=0.5)
+        ax.plot(x_true, f_true, 'k', label=r'true $f$', zorder=-1, alpha=0.5)
+        ax.plot(x, y, 'x', label='obs / inducing points', color='black', alpha=0.5)
         # ax.set_xlim([-10, 10])
         ax.set_ylim([-5., 5.])
         ax.set_xlabel(r'$x$')
@@ -380,8 +382,8 @@ def sparse_gp_inference(seed, path):
     model_parameter = dict(
         num_inducing_points = 20)
     sampling_parameter = dict(  # SMC parameter
-        num_particles = 2,
-        num_mcmc_steps = 1)
+        num_particles = 500,
+        num_mcmc_steps = 10)
     logging.info(f'model parameter: {model_parameter}')
     logging.info(f'sampling parameter: {sampling_parameter}')
 
@@ -418,7 +420,7 @@ def sparse_gp_inference(seed, path):
     logging.info('run inference')
     key, key_inference = jrnd.split(key)
     start = timer()
-    with jax.disable_jit(disable=False):
+    with jax.disable_jit(disable=False): #, jax.debug_nans():
         initial_particles, particles, _, marginal_likelihood = gp_sparse.inference(
             key_inference, 
             mode='gibbs-in-smc', 
@@ -434,13 +436,17 @@ def sparse_gp_inference(seed, path):
         title=f'Sparse GP' + sub_title,
         folder=path)
     plot_predictive_f(
-        key, x, y, ground_truth.get('f'),
+        key=key, x=x, y=y, 
+        x_true=x, f_true=ground_truth.get('f'),
         predictive_fn=gp_sparse.predict_f,
         x_pred=jnp.linspace(-0.5, 1.5, num=150),
         title='Sparse GP\npredictive f',
         folder=path)
+    z = jnp.mean(particles.particles['Z'], axis=0)
+    u = jnp.mean(particles.particles['u'], axis=0)
     plot_predictive_f(
-        key, x, y, ground_truth.get('f'),
+        key=key, x=z, y=u, 
+        x_true=x, f_true=ground_truth.get('f'),
         predictive_fn=gp_sparse.predict_f_from_u,
         x_pred=jnp.linspace(-0.5, 1.5, num=150),
         title='Sparse GP\npredictive f from u',
@@ -472,12 +478,12 @@ def sparse_gp_inference(seed, path):
 def main():
     # create unique folder name for log files and other output
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    path = f'./results_sparse_gp_test/{timestamp}/'
+    path = f'./results_sparse_gp_test/samplingF_{timestamp}/'
 
     # parameters and random seeds  
-    #    TODO: seed random random seed generator
     num_runs = 3
-    random_random_seeds = np.random.randint(0, 10000 + 1, num_runs)
+    random_random_seeds = jrnd.randint(
+        jrnd.PRNGKey(23), [num_runs], 0, jnp.iinfo(jnp.int32).max)
 
     # run sparse gp
     id = 'sparseGP'
@@ -490,11 +496,13 @@ def main():
         log_level = logging.INFO)
     logging.info(f'experiment id: {id}')
     logging.info(f'number_runs: {num_runs}')
+    logging.info(f'note: fixed z, ellipical slice f')
     
     ## inference for each seed
     for i in range(num_runs):
         logging.info('')  # intentionally left blank
         logging.info(f'run: {i}')
+        logging.info(f'seed: {random_random_seeds[i]}')
         sparse_gp_inference(random_random_seeds[i], path=paths[i])
 
     ## summary stats
@@ -506,7 +514,6 @@ def main():
         print(f' {var}')
         for stat in summary_stats[var]:
             print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
-
 
     # run latent gp
     id = 'latentGP'

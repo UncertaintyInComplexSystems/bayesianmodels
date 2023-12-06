@@ -246,8 +246,7 @@ class SparseGPModel(FullGPModel):
         # define likelihood function
         # NOTE: The function might use old parameter values if they are updated.
         #   That means the u update uses an outdated likelihood...
-        #   - Either do the likelihood update at the end
-        #   - or use a location function that returns an updated likelihood function. 
+        #   - Thus moved likelihood update to the end 
         likelihood_params = position.get('likelihood', {})
         loglikelihood_fn_ = lambda f_: temperature * jnp.sum(
                 self.likelihood.log_prob(params=likelihood_params, f=f_, y=self.y))
@@ -273,7 +272,12 @@ class SparseGPModel(FullGPModel):
             # sub_state = dx.MultivariateNormalFullCovariance(
             #     mean, 
             #     cov).sample(seed=subkey, sample_shape=1).flatten()
-            # jax.debug.print('new f {d}', d=sub_state.shape)
+
+            # key, subkey = jrnd.split(key)
+            # L = jnp.linalg.cholesky(cov)
+            # z = jrnd.normal(subkey, shape=[self.n]) 
+            # sub_state = jnp.asarray(mean + jnp.dot(L, z))
+            # ic(sub_state.shape)
             
             # sample f with ellipical slice sampling
             key, subkey = jrnd.split(key)
@@ -282,11 +286,12 @@ class SparseGPModel(FullGPModel):
                 position['f'], 
                 loglikelihood_fn_, 
                 mean, cov)
-            #jax.debug.print('old f {d}', d=sub_state.shape)
+            # ic(sub_state.shape)
             
-            return key, sub_state  # TODO: Don't return key, e.g. splitting needs to happen outside of function.
+            return sub_state
         
-        key, position['f'] = sample_f(key, position)
+        key, subkey = jrnd.split(key)
+        position['f'] = sample_f(subkey, position)
 
 
         # update cov parameters 
@@ -341,7 +346,7 @@ class SparseGPModel(FullGPModel):
             position['kernel'] = sub_state
         
         # update Z  # TODO: needs to be adapted to changes in code-base after merge with main
-        if True:
+        if False:
             # Z_params = self.__get_component_parameters(
             #     position, 
             #     'inducing_inputs_Z')
@@ -388,8 +393,6 @@ class SparseGPModel(FullGPModel):
             sub_state, sub_info = update_metropolis(  
                 subkey, 
                 logdensity_fn_, 
-                # NOTE: Packing Z samples into dict for metropolis update
-                # how does that work for other variables? -> They get a whole gibbs_state
                 position['Z'],  
                 stepsize=mcmc_parameters.get(
                     'stepsizes', 
