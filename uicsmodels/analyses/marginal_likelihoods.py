@@ -4,10 +4,9 @@ import jax.numpy as jnp
 import jax.random as jrnd
 
 import jaxopt
-from jaxopt.tree_util import tree_map
 
 from jax.scipy.special import logsumexp
-from jax.tree_util import tree_flatten, tree_unflatten
+from jax.tree_util import tree_flatten, tree_unflatten, tree_map
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
