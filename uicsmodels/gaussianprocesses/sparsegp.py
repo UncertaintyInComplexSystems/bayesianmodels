@@ -253,7 +253,7 @@ class SparseGPModel(FullGPModel):
             cov_params = position_.get('kernel', {}) 
             likelihood_params = position_.get('likelihood', {})
 
-            loglikelihood_fn_ = lambda f_: temperature * jnp.sum(
+            loglikelihood_fn_ = lambda f_: temperature * jnp.sum( 
                 self.likelihood.log_prob(
                     params=likelihood_params, f=f_, y=self.y))
 
@@ -543,11 +543,11 @@ class SparseGPModel(FullGPModel):
         cov_params = samples.get('kernel', {})
         mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
         cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
-        
-        Z = samples.get('Z')
-        Z = jnp.mean(Z, axis=0)  # HACK: This is only valid as long as all Z's are the same accross particles
 
-        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(
+        Z = samples.get('Z')  # shape: (num_particles, num_inducing_points)
+        Z_in_axes = jax.tree_map(lambda l: 0, Z)
+
+        sample_fun = lambda key, mean_params, cov_params, Z, target: sample_predictive(
             key,
             x=Z, 
             z=x_pred,
@@ -558,14 +558,15 @@ class SparseGPModel(FullGPModel):
             cov_fn=self.cov_fn,
             obs_noise=None
             )
-
+        
         keys = jrnd.split(key, num_particles)
         target_pred = jax.vmap(
             jax.jit(sample_fun), 
-            in_axes=(0, mean_param_in_axes, cov_param_in_axes, 0))(
+            in_axes=(0, mean_param_in_axes, cov_param_in_axes, Z_in_axes, 0))(
                 keys,
                 mean_params,
-                cov_params, 
+                cov_params,
+                Z,
                 samples['u'])
 
         return target_pred

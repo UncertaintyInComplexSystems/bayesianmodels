@@ -198,7 +198,7 @@ def plot_smc(x, y, particles, ground_truth, title, folder):
             if pd_filtered.shape[0] == 0:
                 pd_filtered = pd
 
-            ax.hist(pd_filtered, bins=30, density=True, color=colors['blue'])
+            ax.hist(pd_filtered, bins=None, density=True, color=colors['blue'])
             ax.set_xlabel(p)
             
             if p in ground_truth.keys():
@@ -235,7 +235,8 @@ def plot_smc(x, y, particles, ground_truth, title, folder):
         fig, axs = plt.subplots(
                 nrows=num_rows, ncols=plots_per_row, 
                 constrained_layout=True,
-                sharex=None, sharey=None, figsize=(12, 2 + (num_rows*2)))
+                sharex='all', sharey=None,
+                figsize=(2 + (plots_per_row*2), 2 + (num_rows*2)))
         axs = axs.flatten()
 
         colors = plt.colormaps.get_cmap('brg')(np.linspace(0, 1, num_inducing_points))
@@ -269,11 +270,11 @@ def plot_smc(x, y, particles, ground_truth, title, folder):
 
     plot_inducing_point_histograms(
         particles=particles.get('u'),
-        plots_per_row=5,
+        plots_per_row=20,
         title=title+f'\nposterior inducing points $u$')
     plot_inducing_point_histograms(
         particles=particles.get('Z'),
-        plots_per_row=5,
+        plots_per_row=20,
         title=title+f'\nposterior inducing points $Z$')
 
 
@@ -380,10 +381,10 @@ def sparse_gp_inference(seed, path):
 
     # setup model parameter
     model_parameter = dict(
-        num_inducing_points = 20)
+        num_inducing_points = 40)
     sampling_parameter = dict(  # SMC parameter
         num_particles = 1000,
-        num_mcmc_steps = 50)
+        num_mcmc_steps = 100)
     logging.info(f'model parameter: {model_parameter}')
     logging.info(f'sampling parameter: {sampling_parameter}')
 
@@ -393,7 +394,6 @@ def sparse_gp_inference(seed, path):
             lengthscale = dx.Transformed( 
                 dx.Normal(loc=0.0, scale=1.0),
                 tfb.Exp()), 
-
             variance = dx.Transformed( 
                 dx.Normal(loc=0.0, scale=1.0),
                 tfb.Exp())),
@@ -427,7 +427,7 @@ def sparse_gp_inference(seed, path):
             sampling_parameters=sampling_parameter)
     logging.info(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
-    
+
     # plot results
     logging.info('generate plots')
     sub_title = ''
@@ -445,7 +445,7 @@ def sparse_gp_inference(seed, path):
     z = jnp.mean(particles.particles['Z'], axis=0)
     u = jnp.mean(particles.particles['u'], axis=0)
     plot_predictive_f(
-        key=key, x=z, y=u, 
+        key=key, x=z, y=u, # TODO: x and y need a better name as they have nothing to do with the predictive itself, they are only used for plotting.
         x_true=x, f_true=ground_truth.get('f'),
         predictive_fn=gp_sparse.predict_f_from_u,
         x_pred=jnp.linspace(-0.5, 1.5, num=150),
@@ -476,11 +476,11 @@ def sparse_gp_inference(seed, path):
     
 
 def main():
-    note = f'freeZ_20-inducing'
+    note = f'fullTest_40-inducing_100mcmc'
 
     # create unique folder name for log files and other output
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    path = f'./results_sparse_gp_test/{timestamp}_samplingF_{note}/'
+    path = f'./results_sparse_gp_test/{timestamp}_{note}/'
 
     # parameters and random seeds  
     num_runs = 3
@@ -496,7 +496,7 @@ def main():
         sub_folders = sub_folders,
         id = id,
         log_level = logging.INFO)
-    logging.info(f'experiment id: {id} | {note}')
+    logging.info(f'experiment id: {id} / {note}')
     logging.info(f'number_runs: {num_runs}')
     
     ## inference for each seed
