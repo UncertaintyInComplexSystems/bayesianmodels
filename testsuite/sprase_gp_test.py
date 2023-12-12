@@ -3,12 +3,12 @@ import sys
 import datetime
 import logging
 import pickle
-import csv
 from timeit import default_timer as timer
 
-import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import numpy as np
+from scipy import signal
 
 import jax
 from jax.config import config
@@ -95,7 +95,7 @@ def setup_results_folder_and_logging(
 
 
 
-def generate_data(path_plot=None, seed=12345):
+def generate_smooth_data(path_plot=None, seed=12345):
     key_data = jrnd.PRNGKey(seed)  # 1106, 5368, 8928, 5609
 
     lengthscale_ = 0.2
@@ -135,6 +135,36 @@ def generate_data(path_plot=None, seed=12345):
         plt.close()
 
     return x, y, ground_truth
+
+def generate_square_data(path_plot=None, seed=12345):
+        key_data = jrnd.PRNGKey(seed)  # 1106, 5368, 8928, 5609
+
+        num_periods = 2
+        obs_noise_ = 0.1
+        n = 100
+
+        x = jnp.linspace(0, 1, n)[:, jnp.newaxis]
+        f_true = signal.square(2*np.pi * num_periods * x).flatten()
+        _, obs_key = jrnd.split(key_data)
+        y = f_true + obs_noise_*jrnd.normal(obs_key, shape=(n,))
+
+        ground_truth = dict(
+        f=f_true,
+        obs_noise=obs_noise_)
+
+        if path_plot is not None:
+            plt.figure(figsize=(12, 4))
+            plt.plot(x, f_true, 'k', label=r'$f$')
+            plt.plot(x, y, 'rx', label='obs')
+            plt.xlabel('x')
+            plt.ylabel('y')
+            # plt.xlim([0., 1.])
+            plt.legend()
+            plt.savefig(f'./{path_plot}/data.png')
+            plt.close()
+
+        return x, y, ground_truth
+
 
 
 def plot_smc(x, y, particles, ground_truth, title, folder):
@@ -377,7 +407,7 @@ def sparse_gp_inference(seed, path):
     key = jrnd.PRNGKey(seed)
 
     # generate data
-    x, y, ground_truth = generate_data(path_plot=path)
+    x, y, ground_truth = generate_smooth_data(path_plot=path)
 
     # setup model parameter
     model_parameter = dict(

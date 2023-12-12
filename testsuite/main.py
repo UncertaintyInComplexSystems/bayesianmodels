@@ -1,13 +1,8 @@
 
-
 import os
 import argparse
-import datetime
-
 
 if __name__ == '__main__':
-    
-
     parser = argparse.ArgumentParser()
     parser.add_argument('-gpu', dest='GPU', type=int)
     args =  parser.parse_args()
@@ -22,4 +17,5 @@ if __name__ == '__main__':
     print()
 
     import sprase_gp_test
-    sprase_gp_test.main()
+    # sprase_gp_test.main()
+    sprase_gp_test.main_wip()
