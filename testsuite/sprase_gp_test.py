@@ -407,7 +407,7 @@ def sparse_gp_inference(seed, path):
             mean=dx.Deterministic(
                 loc=jnp.ones(shape=model_parameter['num_inducing_points']) * jnp.mean(x)),
             scale=dx.Deterministic(
-                loc=jnp.ones(shape=model_parameter['num_inducing_points']) * jnp.std(x)*.5)))
+                loc=jnp.ones(shape=model_parameter['num_inducing_points']) * jnp.std(x))))
 
     # setup model
     gp_sparse = SparseGPModel(
@@ -476,7 +476,7 @@ def sparse_gp_inference(seed, path):
     
 
 def main():
-    note = f'fullTest_40-inducing_100mcmc'
+    note = f'fullTest_40-inducing_100mcmc_fixPriorZ'
 
     # create unique folder name for log files and other output
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
