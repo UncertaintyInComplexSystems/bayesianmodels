@@ -23,7 +23,7 @@ from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
-jitter = 1e-6
+JITTER = 1e-6
 
 from icecream import ic
 
@@ -84,12 +84,12 @@ class SparseGPModel(FullGPModel):
         cov_XX = self.cov_fn.cross_covariance(
             params=cov_params,
             x=x, y=x) 
-        cov_XX += jitter * jnp.eye(*cov_XX.shape)
+        cov_XX += JITTER * jnp.eye(*cov_XX.shape)
         
         cov_ZZ = self.cov_fn.cross_covariance(
             params=cov_params,
             x=samples_Z, y=samples_Z)
-        cov_ZZ += jitter * jnp.eye(*cov_ZZ.shape)
+        cov_ZZ += JITTER * jnp.eye(*cov_ZZ.shape)
 
         cov_XZ = self.cov_fn.cross_covariance(
             params=cov_params,
@@ -101,7 +101,7 @@ class SparseGPModel(FullGPModel):
         cov_gp = cov_XX - jnp.dot(cov_XZ, ZZ_ZX)
 
         if add_jitter:
-            cov_gp += jitter * jnp.eye(*cov_gp.shape)
+            cov_gp += JITTER * jnp.eye(*cov_gp.shape)
 
         return mean_gp, cov_gp
 
@@ -140,19 +140,20 @@ class SparseGPModel(FullGPModel):
             key_sample_f = sub_key[2]
 
             # sample M inducing inputs Z
-            # samples_Z = dx.Normal(   
-            #     loc=Z_params['mean'],
-            #     scale=Z_params['scale']).sample(seed=key_sample_z)
+            samples_Z = dx.Normal(   
+                loc=Z_params['mean'],
+                scale=Z_params['scale']).sample(seed=key_sample_z)
 
             # true evenly-spaced Z in x domain allows drawing true u samples
-            lin_Z = jnp.linspace(
-                jnp.min(self.X), 
-                jnp.max(self.X), 
-                self.m)
+            # lin_Z = jnp.linspace(
+            #     jnp.min(self.X), 
+            #     jnp.max(self.X), 
+            #     self.m)
             # find and select closest values in X-domain
-            samples_Z_idx = jnp.searchsorted(
-                self.X.flatten(), lin_Z)
-            samples_Z = self.X.flatten()[samples_Z_idx]
+            # samples_Z_idx = jnp.searchsorted(
+            #    self.X.flatten(), lin_Z)
+            #samples_Z = self.X.flatten()[samples_Z_idx]
+            # samples_Z = lin_Z
 
 
             # Sample inducing variables u
@@ -160,7 +161,7 @@ class SparseGPModel(FullGPModel):
             cov_ZZ = self.cov_fn.cross_covariance(
                 params=cov_params,
                 x=samples_Z, y=samples_Z) 
-            cov_ZZ = cov_ZZ + jitter * jnp.eye(cov_ZZ.shape[0])
+            cov_ZZ = cov_ZZ + JITTER * jnp.eye(cov_ZZ.shape[0])
             samples_u = jnp.asarray(mean_u + jnp.dot(
                 jnp.linalg.cholesky(cov_ZZ),
                 jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
@@ -174,11 +175,10 @@ class SparseGPModel(FullGPModel):
                     cov_params=cov_params, 
                     x=self.X,
                     samples_Z=samples_Z, 
-                    samples_u=samples_u)
+                    samples_u=samples_u,
+                    add_jitter=True)
 
             # Sample from GP
-            # NOTE: tell cholesky that the cov. is diagonal, if I set it too. 
-            # NOTE: To account for SMC particles, add dimension in `jrnd.normal`
             L = jnp.linalg.cholesky(cov_gp)
             z = jrnd.normal(key_sample_f, shape=[self.n])
             samples_f = jnp.asarray(mean_gp + jnp.dot(L, z))
@@ -205,7 +205,6 @@ class SparseGPModel(FullGPModel):
                 )(key_sample_particles, cov_params, Z_params)
                 
         else:
-            # NOTE: Not tested / modified after pulling latest changes.
             _, key_sample_latents = jrnd.split(key)
 
             samples_Z, samples_u, samples_f = sample_latent(
@@ -271,6 +270,11 @@ class SparseGPModel(FullGPModel):
                 position_['f'], 
                 loglikelihood_fn_, 
                 mean, cov)
+            
+            # sample f directly
+            # L = jnp.linalg.cholesky(cov)
+            # z = jrnd.normal(key, shape=[self.n])
+            # sub_state = jnp.asarray(mean + jnp.dot(L, z))
             
             return sub_state
         
@@ -339,8 +343,8 @@ class SparseGPModel(FullGPModel):
                     cov_params=cov_params, 
                     x=self.X,
                     samples_Z=z,
-                    samples_u=position_['u'])
-                cov_gp += jitter * jnp.eye(self.n)
+                    samples_u=position_['u'],
+                    add_jitter=True)
                 log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
 
                 # p(u | Z, theta)
@@ -349,7 +353,7 @@ class SparseGPModel(FullGPModel):
                     params=cov_params,
                     x=z,
                     y=z)
-                cov_u += jitter * jnp.eye(z.shape[0])
+                cov_u += JITTER * jnp.eye(z.shape[0])
                 log_pdf += dx.MultivariateNormalFullCovariance(
                     mean_u, 
                     cov_u).log_prob(position_['u'])
@@ -376,7 +380,7 @@ class SparseGPModel(FullGPModel):
                 params=cov_params,
                 x=position_['Z'],
                 y=position_['Z'])
-            cov_u += jitter * jnp.eye(*cov_u.shape)
+            cov_u += JITTER * jnp.eye(*cov_u.shape)
 
             def logdensity_fn_u(u_):
                 mean, cov = self._compute_sparse_gp(
@@ -494,7 +498,7 @@ class SparseGPModel(FullGPModel):
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
             cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
-                                               y=self.X) + jitter * jnp.eye(self.n)
+                                               y=self.X) + JITTER * jnp.eye(self.n)
             logprob += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
             return logprob
 
