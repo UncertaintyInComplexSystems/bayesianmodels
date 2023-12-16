@@ -241,7 +241,6 @@ class SparseGPModel(FullGPModel):
     
         # get current gibbs-state
         position = state.position.copy()
-
         
         def sample_f(key, position_):
             """Sample the latent GP using:
