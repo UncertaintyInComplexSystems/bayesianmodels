@@ -80,6 +80,7 @@ class SparseGPModel(FullGPModel):
         """
         Returns mean and covariance matrix of sparse gp
         """
+        # print(cov_params['lengthscale'].shape, x.shape, samples_Z.shape, samples_u.shape)
 
         cov_XX = self.cov_fn.cross_covariance(
             params=cov_params,
@@ -102,6 +103,10 @@ class SparseGPModel(FullGPModel):
 
         if add_jitter:
             cov_gp += JITTER * jnp.eye(*cov_gp.shape)
+
+        # print(cov_gp.shape)
+        cov_gp = jnp.diag(jnp.diag(cov_gp))
+        # print(cov_gp.shape, '\n')
 
         return mean_gp, cov_gp
 
@@ -179,9 +184,12 @@ class SparseGPModel(FullGPModel):
                     add_jitter=True)
 
             # Sample from GP
-            L = jnp.linalg.cholesky(cov_gp)
-            z = jrnd.normal(key_sample_f, shape=[self.n])
-            samples_f = jnp.asarray(mean_gp + jnp.dot(L, z))
+            # L = jnp.linalg.cholesky(cov_gp)
+            # z = jrnd.normal(key_sample_f, shape=[self.n])
+            # samples_f = jnp.asarray(mean_gp + jnp.dot(L, z))
+
+            samples_f = dx.MultivariateNormalDiag(
+                mean_gp, jnp.diag(cov_gp)).sample(seed = key_sample_f)
             
             return samples_Z.flatten(), samples_u, samples_f.flatten()
 
@@ -264,11 +272,13 @@ class SparseGPModel(FullGPModel):
             
             # sample f with ellipical slice sampling
             key, subkey = jrnd.split(key)
-            sub_state, f_info = update_correlated_gaussian(
-                subkey, 
-                position_['f'], 
-                loglikelihood_fn_, 
-                mean, cov)
+            # sub_state, f_info = update_correlated_gaussian(
+            #     subkey, 
+            #     position_['f'], 
+            #     loglikelihood_fn_, 
+            #     mean, cov)
+            
+            sub_state = dx.MultivariateNormalDiag(mean, jnp.diag(cov)).sample(seed = subkey)
             
             # sample f directly
             # L = jnp.linalg.cholesky(cov)
@@ -299,6 +309,7 @@ class SparseGPModel(FullGPModel):
                     params=theta_,
                     x=position_['Z'],
                     y=position_['Z'])
+                cov_u = JITTER * jnp.eye(*cov_u.shape)
                 log_pdf += dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position_['u'])
 
                 # p(f | u, Z, theta, X)
@@ -308,8 +319,10 @@ class SparseGPModel(FullGPModel):
                     samples_Z=position_['Z'],
                     samples_u=position_['u'])
                 
-                log_pdf += dx.MultivariateNormalFullCovariance(
-                    mean_gp, cov_gp).log_prob(position_['f'])
+                # log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
+                log_pdf += dx.MultivariateNormalDiag(mean_gp, jnp.diag(cov_gp)).log_prob(position_['f'])
+
+                # print('log_pdf', log_pdf.shape)
                 
                 return log_pdf
 
@@ -344,7 +357,8 @@ class SparseGPModel(FullGPModel):
                     samples_Z=z,
                     samples_u=position_['u'],
                     add_jitter=True)
-                log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
+                # log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
+                log_pdf += dx.MultivariateNormalDiag(mean_gp, jnp.diag(cov_gp)).log_prob(position_['f'])
 
                 # p(u | Z, theta)
                 mean_u = self.mean_fn.mean(params=None, x=z)
@@ -388,7 +402,8 @@ class SparseGPModel(FullGPModel):
                     samples_Z=position_['Z'],
                     samples_u=u_)
 
-                return dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position_['f'])
+                # return dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position_['f'])
+                return dx.MultivariateNormalDiag(mean, jnp.diag(cov)).log_prob(position_['f'])
 
             key, subkey = jrnd.split(key)
             sub_state, f_info = update_correlated_gaussian(
