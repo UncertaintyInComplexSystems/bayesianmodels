@@ -27,10 +27,10 @@ from typing import Any, Union, NamedTuple, Dict, Any, Iterable, Mapping, Callabl
 from jaxtyping import Float
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
-from blackjax import adaptive_tempered_smc
+from blackjax import adaptive_tempered_smc, rmh
 import blackjax.smc.resampling as resampling
 
-from jax.tree_util import tree_flatten, tree_unflatten
+from jax.tree_util import tree_flatten, tree_unflatten, tree_map
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
@@ -68,38 +68,40 @@ class BayesianModel(ABC):
             samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
 
         initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples)
+        if num_particles == 1:
+            initial_position = tree_map(lambda x: jnp.squeeze(x), initial_position)
         return GibbsState(position=initial_position)
 
     #  
-    def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
-        """The Gibbs MCMC kernel.
+    # def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
+    #     """The Gibbs MCMC kernel.
 
-        The Gibbs kernel step function takes a state and returns a new state. In
-        the latent GP model, the latent GP (f) is first updated, then the
-        parameters of the mean (psi) and covariance function (theta), and lastly
-        the parameters of the observation model (phi).
+    #     The Gibbs kernel step function takes a state and returns a new state. In
+    #     the latent GP model, the latent GP (f) is first updated, then the
+    #     parameters of the mean (psi) and covariance function (theta), and lastly
+    #     the parameters of the observation model (phi).
 
-        Args:
-            key:
-                The jax.random.PRNGKey
-            state: GibbsState
-                The current state in the MCMC sampler
-        Returns:
-            GibbsState
+    #     Args:
+    #         key:
+    #             The jax.random.PRNGKey
+    #         state: GibbsState
+    #             The current state in the MCMC sampler
+    #     Returns:
+    #         GibbsState
 
-        """
+    #     """
 
-        position = state.position.copy()
+    #     position = state.position.copy()
 
-        loglikelihood_fn_ = self.loglikelihood_fn()
-        logprior_fn_ = self.logprior_fn()
+    #     loglikelihood_fn_ = self.loglikelihood_fn()
+    #     logprior_fn_ = self.logprior_fn()
 
-        logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-        new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.01))
+    #     logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
+    #     new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.01))
 
-        return GibbsState(position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
+    #     return GibbsState(position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
 
-    #
+    # #
     def sample_from_prior(self, key, num_samples=1):
         return self.init_fn(key, num_particles=num_samples)
 
@@ -114,6 +116,8 @@ class BayesianModel(ABC):
         Returns:
             A Gibbs state object.
         """
+        if isinstance(position, GibbsState):
+            return position
         return GibbsState(position)
 
     #
@@ -183,16 +187,46 @@ class BayesianModel(ABC):
 
         key, key_init, key_inference = jrnd.split(key, 3)
 
+        if mode == 'gibbs-in-smc' and not (hasattr(self, 'gibbs_fn') and callable(self.gibbs_fn)):
+            sigma = 0.01
+            print(f'No Gibbs kernel available, defaulting to Random Walk Metropolis MCMC, sigma = {sigma:.2f}') 
+            mode = 'mcmc-in-smc'
+            priors_flat, _ = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
+            m = 0            
+            for prior in priors_flat:
+                m += jnp.prod(jnp.asarray(prior.batch_shape)) if prior.batch_shape else 1
+            sampling_parameters['kernel'] = rmh
+            sampling_parameters['kernel_parameters'] = dict(sigma=sigma*jnp.eye(m))
+
+
         if mode == 'gibbs-in-smc' or mode == 'mcmc-in-smc':
             if mode == 'gibbs-in-smc':
                 mcmc_step_fn = self.gibbs_fn
                 mcmc_init_fn = self.smc_init_fn
             elif mode == 'mcmc-in-smc':
+
+                # Set up tempered MCMC kernel
+                def mcmc_step_fn(key, state, temperature, **mcmc_parameters):
+                    def apply_mcmc_kernel(key, logdensity, pos):
+                        kernel = kernel_type(logdensity, **kernel_parameters)
+                        state_ = kernel.init(pos)
+                        state_, info = kernel.step(key, state_)
+                        return state_.position, info
+                    
+                    #
+                    position = state.position.copy()
+                    loglikelihood_fn_ = self.loglikelihood_fn()
+                    logprior_fn_ = self.logprior_fn()
+                    logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
+                    new_position, info_ = apply_mcmc_kernel(key, logdensity, position)
+                    return GibbsState(position=new_position), None  
+
+                #
                 kernel_type = sampling_parameters.get('kernel')
                 kernel_parameters = sampling_parameters.get('kernel_parameters')
-                mcmc_step_fn = kernel_type.kernel(),
-                mcmc_init_fn = kernel_type.init,
+                mcmc_init_fn = self.smc_init_fn
             
+            #Set up adaptive tempered SMC
             smc = adaptive_tempered_smc(
                 logprior_fn=self.logprior_fn(),
                 loglikelihood_fn=self.loglikelihood_fn(),
@@ -201,7 +235,7 @@ class BayesianModel(ABC):
                 mcmc_parameters=sampling_parameters.get('mcmc_parameters', dict()),
                 resampling_fn=resampling.systematic,
                 target_ess=sampling_parameters.get('target_ess', 0.5),
-                num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 50)
+                num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 100)
             )
             num_particles = sampling_parameters.get('num_particles', 1_000)
             initial_particles = self.init_fn(key_init,
@@ -216,6 +250,7 @@ class BayesianModel(ABC):
         elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
+            num_thin = sampling_parameters.get('num_thin', 1)
 
             if mode == 'gibbs':
                 step_fn = self.gibbs_fn
@@ -229,13 +264,15 @@ class BayesianModel(ABC):
                 logdensity_fn = lambda state: loglikelihood_fn(state) + logprior_fn(state)
                 kernel = kernel_type(logdensity_fn, **kernel_parameters)
                 step_fn = kernel.step
-                initial_state = kernel.init(self.init_fn(key_init).position)
+                initial_state = sampling_parameters.get('initial_state', kernel.init(self.init_fn(key_init).position))
 
             states = inference_loop(key_inference,
                                     step_fn,
                                     initial_state,
                                     num_burn + num_samples)
-            self.states = states #if mode == 'gibbs' else states.position
+
+            # remove burn-in
+            self.states = tree_map(lambda x: x[num_burn::num_thin], states)
             return states
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
@@ -245,9 +282,9 @@ class BayesianModel(ABC):
         if hasattr(self, 'particles'):
             return self.particles.particles
         elif hasattr(self, 'states'):
-            return self.states.initial_position
+            return self.states.position
         else:
-            return None
+            raise ValueError('No inference has been performed')
 
     #
     def plot_priors(self, axes=None):
