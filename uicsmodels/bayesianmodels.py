@@ -73,35 +73,6 @@ class BayesianModel(ABC):
         return GibbsState(position=initial_position)
 
     #  
-    # def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
-    #     """The Gibbs MCMC kernel.
-
-    #     The Gibbs kernel step function takes a state and returns a new state. In
-    #     the latent GP model, the latent GP (f) is first updated, then the
-    #     parameters of the mean (psi) and covariance function (theta), and lastly
-    #     the parameters of the observation model (phi).
-
-    #     Args:
-    #         key:
-    #             The jax.random.PRNGKey
-    #         state: GibbsState
-    #             The current state in the MCMC sampler
-    #     Returns:
-    #         GibbsState
-
-    #     """
-
-    #     position = state.position.copy()
-
-    #     loglikelihood_fn_ = self.loglikelihood_fn()
-    #     logprior_fn_ = self.logprior_fn()
-
-    #     logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-    #     new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.01))
-
-    #     return GibbsState(position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
-
-    # #
     def sample_from_prior(self, key, num_samples=1):
         return self.init_fn(key, num_particles=num_samples)
 
@@ -278,13 +249,12 @@ class BayesianModel(ABC):
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 
     #
-    def get_monte_carlo_samples(self):
-        if hasattr(self, 'particles'):
+    def get_monte_carlo_samples(self, mode='smc'):
+        if mode == 'smc' and hasattr(self, 'particles'):
             return self.particles.particles
-        elif hasattr(self, 'states'):
-            return self.states.position
-        else:
-            raise ValueError('No inference has been performed')
+        elif mode == 'mcmc' and hasattr(self, 'states'):
+            return self.states.position.position
+        raise ValueError('No inference has been performed')
 
     #
     def plot_priors(self, axes=None):
