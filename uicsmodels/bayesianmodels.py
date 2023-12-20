@@ -253,7 +253,7 @@ class BayesianModel(ABC):
         if mode == 'smc' and hasattr(self, 'particles'):
             return self.particles.particles
         elif mode == 'mcmc' and hasattr(self, 'states'):
-            return self.states.position.position
+            return self.states.position
         raise ValueError('No inference has been performed')
 
     #
