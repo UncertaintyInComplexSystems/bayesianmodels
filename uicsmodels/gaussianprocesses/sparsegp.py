@@ -63,16 +63,6 @@ class SparseGPModel(FullGPModel):
         self.m = num_inducing_points  # TODO: Instead of passing, infer from prior over inducing inputs
         self.f_true = f_true
         super().__init__(X, y, cov_fn, mean_fn, priors)        
-        
-
-    #
-    def __get_component_parameters(self, position, component):
-        """Extract parameter sampled values per model component for current
-        position.
-
-        """
-        return {param: position[param] for param in
-                self.param_priors[component]} if component in self.param_priors else {}
 
     #
     def _compute_sparse_gp(
@@ -105,7 +95,7 @@ class SparseGPModel(FullGPModel):
             cov_gp += JITTER * jnp.eye(*cov_gp.shape)
 
         # print(cov_gp.shape)
-        cov_gp = jnp.diag(jnp.diag(cov_gp))
+        # cov_gp = jnp.diag(jnp.diag(cov_gp))
         # print(cov_gp.shape, '\n')
 
         return mean_gp, cov_gp
@@ -272,13 +262,13 @@ class SparseGPModel(FullGPModel):
             
             # sample f with ellipical slice sampling
             key, subkey = jrnd.split(key)
-            # sub_state, f_info = update_correlated_gaussian(
-            #     subkey, 
-            #     position_['f'], 
-            #     loglikelihood_fn_, 
-            #     mean, cov)
+            sub_state, f_info = update_correlated_gaussian(
+                subkey, 
+                position_['f'], 
+                loglikelihood_fn_, 
+                mean, cov)
             
-            sub_state = dx.MultivariateNormalDiag(mean, jnp.diag(cov)).sample(seed = subkey)
+            # sub_state = dx.MultivariateNormalDiag(mean, jnp.diag(cov)).sample(seed = subkey)
             
             # sample f directly
             # L = jnp.linalg.cholesky(cov)
@@ -319,8 +309,8 @@ class SparseGPModel(FullGPModel):
                     samples_Z=position_['Z'],
                     samples_u=position_['u'])
                 
-                # log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
-                log_pdf += dx.MultivariateNormalDiag(mean_gp, jnp.diag(cov_gp)).log_prob(position_['f'])
+                log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
+                # log_pdf += dx.MultivariateNormalDiag(mean_gp, jnp.diag(cov_gp)).log_prob(position_['f'])
 
                 # print('log_pdf', log_pdf.shape)
                 
@@ -357,8 +347,8 @@ class SparseGPModel(FullGPModel):
                     samples_Z=z,
                     samples_u=position_['u'],
                     add_jitter=True)
-                # log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
-                log_pdf += dx.MultivariateNormalDiag(mean_gp, jnp.diag(cov_gp)).log_prob(position_['f'])
+                log_pdf += dx.MultivariateNormalFullCovariance(mean_gp, cov_gp).log_prob(position_['f'])
+                # log_pdf += dx.MultivariateNormalDiag(mean_gp, jnp.diag(cov_gp)).log_prob(position_['f'])
 
                 # p(u | Z, theta)
                 mean_u = self.mean_fn.mean(params=None, x=z)
@@ -402,8 +392,8 @@ class SparseGPModel(FullGPModel):
                     samples_Z=position_['Z'],
                     samples_u=u_)
 
-                # return dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position_['f'])
-                return dx.MultivariateNormalDiag(mean, jnp.diag(cov)).log_prob(position_['f'])
+                return dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position_['f'])
+                #return dx.MultivariateNormalDiag(mean, jnp.diag(cov)).log_prob(position_['f'])
 
             key, subkey = jrnd.split(key)
             sub_state, f_info = update_correlated_gaussian(
