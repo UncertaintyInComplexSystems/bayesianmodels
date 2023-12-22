@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from uicsmodels.sampling.inference import inference_loop, smc_inference_loop
+from uicsmodels.sampling.inference import inference_loop, smc_inference_loop, smc_inference_loop_trace
 from uicsmodels.sampling.inference import update_metropolis
 
 from abc import ABC, abstractmethod
@@ -209,14 +209,27 @@ class BayesianModel(ABC):
                 num_mcmc_steps=sampling_parameters.get('num_mcmc_steps', 100)
             )
             num_particles = sampling_parameters.get('num_particles', 1_000)
+            include_trace = sampling_parameters.get('include_trace', False)
             initial_particles = self.init_fn(key_init,
                                              num_particles=num_particles)
-            initial_smc_state = smc.init(initial_particles.position)
-            num_iter, particles, marginal_likelihood = smc_inference_loop(key_inference,
-                                                                          smc.step,
-                                                                          initial_smc_state)
+            initial_smc_state = smc.init(initial_particles.position)   
+            
+            if include_trace:
+                smc_output = smc_inference_loop_trace(key_inference,
+                                                      smc.step,
+                                                      initial_smc_state)
+                num_iter, particles, marginal_likelihood, trace = smc_output
+            else:
+                smc_output = smc_inference_loop(key_inference,
+                                                smc.step,
+                                                initial_smc_state)
+                num_iter, particles, marginal_likelihood = smc_output
+                
             self.particles = particles
             self.marginal_likelihood = marginal_likelihood
+
+            if include_trace:
+                return particles, num_iter, marginal_likelihood, trace
             return particles, num_iter, marginal_likelihood
         elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
