@@ -30,7 +30,7 @@ from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
-from uicsmodels.gaussianprocesses.sparsegp import SparseGPModel
+from uicsmodels.gaussianprocesses.sparsegp import SparseGPModel, SparseGPModel_Rossi
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
 
 
@@ -628,6 +628,105 @@ def sparse_gp_inference(
     mse = mse(jnp.mean(particles.particles['f'], axis=0), ground_truth.get('f'))
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
+def sparse_gp_inference_rossi(
+    seed,
+    model_parameter:dict, 
+    sampling_parameter:dict,
+    data:dict, path:str):
+
+    key = jrnd.PRNGKey(seed)
+    x = data['x']
+    y = data['y']
+    ground_truth = data['ground_truth']
+    logging.info(f'model parameter: {model_parameter}')
+    logging.info(f'sampling parameter: {sampling_parameter}')
+
+    # prior
+    priors = dict(
+        kernel=dict(
+            lengthscale = dx.Transformed( 
+                dx.Normal(loc=0.0, scale=1.0),
+                tfb.Exp()), 
+            variance = dx.Transformed( 
+                dx.Normal(loc=0.0, scale=1.0),
+                tfb.Exp())),
+
+        likelihood=dict(
+            obs_noise = dx.Transformed(
+                dx.Normal(loc=0.0, scale=1.0), 
+                tfb.Exp())),
+            
+        inducing_inputs_Z=dict( 
+            mean=dx.Deterministic(
+                loc=jnp.zeros(shape=model_parameter['num_inducing_points'])),
+            scale=dx.Deterministic(
+                loc=jnp.ones(shape=model_parameter['num_inducing_points']))))
+
+    # setup model
+    gp_sparse = SparseGPModel_Rossi(
+        x, y, 
+        cov_fn=jk.RBF(), 
+        priors=priors, 
+        num_inducing_points=model_parameter['num_inducing_points'])  
+
+    # inference
+    logging.info('run inference')
+    key, key_inference = jrnd.split(key)
+    start = timer()
+    initial_particles, particles, _, marginal_likelihood = gp_sparse.inference(
+        key_inference, 
+        mode='gibbs-in-smc', 
+        sampling_parameters=sampling_parameter)
+    logging.info(
+        '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
+
+    # plot results
+    logging.info('generate plots')
+    sub_title = ''
+    plot_smc(
+        x, y, particles.particles, ground_truth, 
+        title=f'Sparse GP Rossi' + sub_title,
+        folder=path)
+    plot_predictive_f(
+        key=key, x=x, y=y, 
+        x_true=x, f_true=ground_truth.get('f'),
+        predictive_fn=gp_sparse.predict_f,
+        x_pred=jnp.linspace(-2.5, 2.5, num=250),
+        title='Sparse GP Rossi\npredictive f',
+        folder=path)
+    z = jnp.mean(particles.particles['Z'], axis=0)
+    u = jnp.mean(particles.particles['u'], axis=0)
+    plot_predictive_f(
+        key=key, x=z, y=u, # TODO: x and y need a better name as they have nothing to do with the predictive itself, they are only used for plotting.
+        x_true=x, f_true=ground_truth.get('f'),
+        predictive_fn=gp_sparse.predict_f_from_u,
+        x_pred=jnp.linspace(-2.5, 2.5, num=250),
+        title='Sparse GP Rossi\npredictive f from u',
+        folder=path)
+    
+    # pickle data and infernece output for combining the results later
+    logging.info('pickle data and inference output')
+    to_pickle = dict(
+        x = x,
+        y = y,
+        ground_truth = ground_truth,
+        initial_particles = initial_particles,
+        particles = particles,
+        marginal_likelihood=marginal_likelihood)
+    for dkey in to_pickle:
+        logging.debug('pickle ' + path+f'{dkey}.pickle')
+        with open(path+f'{dkey}.pickle', 'wb') as file_handle:
+            pickle.dump(
+                to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # compute mean squared error between f particle mean and true f
+    def mse(approx, true):
+        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+
+    mse = mse(jnp.mean(particles.particles['f'], axis=0), ground_truth.get('f'))
+    logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+
+
 def main(args):
     # parse config file
     config = configparser.ConfigParser()
@@ -706,21 +805,30 @@ def main(args):
                 print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
 
     # sparse gp
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='sparseGP',
+    #     num_runs = num_runs,
+    #     inference_fn=sparse_gp_inference,
+    #     data=data,
+    #     root_path=path)
+    
+    # sparse gp Rossi
     run_model(
         seeds=random_random_seeds,
-        id='sparseGP',
+        id='sparseGPRossi',
         num_runs = num_runs,
-        inference_fn=sparse_gp_inference,
+        inference_fn=sparse_gp_inference_rossi,
         data=data,
         root_path=path)
 
-    # # run latent gp
-    run_model(
-        seeds=random_random_seeds,
-        id='latentGP',
-        num_runs = num_runs,
-        inference_fn=latent_gp_inference,
-        data=data,
-        root_path=path)
+    # run latent gp
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='latentGP',
+    #     num_runs = num_runs,
+    #     inference_fn=latent_gp_inference,
+    #     data=data,
+    #     root_path=path)
 
 
