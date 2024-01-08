@@ -647,7 +647,7 @@ def main(args):
         num_mcmc_steps = int(
             config['sampling_parameter']['num_mcmc_steps']))
 
-    note = 'debug'
+    note = 'test-naiv-FITC'
     note += f'_{model_parameter["num_inducing_points"]}-inducing'
     note += f'_{sampling_parameter["num_particles"]}_{sampling_parameter["num_mcmc_steps"]}-smc'
     note += f'_{data_type}'
