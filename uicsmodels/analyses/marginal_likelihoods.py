@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import jax.random as jrnd
 
 import jaxopt
+from tqdm import tqdm
 
 from jax.scipy.special import logsumexp
 from jax.tree_util import tree_flatten, tree_unflatten, tree_map
@@ -17,7 +18,7 @@ from uicsmodels.bayesianmodels import BayesianModel, GibbsState
 
 
 def iid_likelihood(L: Callable):
-    """
+    r"""
     
     We typically have multiple observations and assume the likelihood factorizes 
     as: 
@@ -33,7 +34,7 @@ def naive_monte_carlo(key,
                       num_prior_draws: int = 1_000, 
                       num_chunks: int = 5,
                       iid_obs: bool = True) -> Float:   
-    """The Naive Monte Carlo (NMC) estimator
+    r"""The Naive Monte Carlo (NMC) estimator
 
     The marginal likelihood is defined by 
     
@@ -58,7 +59,7 @@ def naive_monte_carlo(key,
     
     # We don't want to vmap this loop, as the reason for the loop is to avoid
     # running out of memory!
-    for i in range(num_chunks):
+    for i in tqdm(range(num_chunks)):
         key, subkey = jrnd.split(key)
         prior_draws = model.sample_from_prior(subkey, 
                                               num_samples=num_prior_draws)
@@ -79,7 +80,7 @@ def importance_sampling(key,
                         num_samples: int = 1_000,
                         iid_obs: bool = True) -> Float:
     
-    """Importance sampling routine for a given BayesianModel.
+    r"""Importance sampling routine for a given BayesianModel.
 
     Importance sampling is based around the following approximation to the log
     marginal likelihood (see e.g., Gronau et al., 2017):
@@ -143,7 +144,7 @@ def laplace_approximation(key,
                           iid_obs: bool= True,
                           **opt_args):
 
-    """Compute the Laplace approximation of the log marginal likelihood of model
+    r"""Compute the Laplace approximation of the log marginal likelihood of model
 
     The Laplace approximation approximates the posterior density of the model 
     with a Gaussian, centered at the mode of the density and with its curvature

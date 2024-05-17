@@ -7,6 +7,9 @@ from jax.typing import ArrayLike
 from jaxtyping import Float
 from jax.random import PRNGKeyArray as PRNGKey
 from jax.tree_util import tree_flatten, tree_map
+from jax.flatten_util import ravel_pytree
+
+
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, Iterable, Mapping
 from numpy import var
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
@@ -16,9 +19,61 @@ from blackjax import elliptical_slice, rmh
 
 __all__ = ['inference_loop', 
            'smc_inference_loop', 
-           'smc_inference_loop', 
+           'smc_inference_loop_trace',
+           'smc_inference_loop_adaptive_steps', 
            'update_gaussian_process', 
            'update_gaussian_process_cov_params']
+
+def ravel_state(state):
+    return jax.vmap(lambda x: ravel_pytree(x)[0])(state.particles)
+
+def smc_inference_loop_adaptive_steps(rng_key: PRNGKey, 
+                                      smc_kernel: Callable, 
+                                      initial_state):
+    """The sequential Monte Carlo loop.
+
+    Args:
+        key: 
+            The jax.random.PRNGKey
+        smc_kernel: 
+            The SMC kernel object (e.g. SMC, tempered SMC or 
+                    adaptive-tempered SMC)
+        initial_state: 
+            The initial state for each particle
+    Returns:
+        n_iter: int
+            The number of tempering steps
+        final_state: 
+            The final state of each of the particles
+        info: SMCinfo
+            the SMC info object which contains the log marginal likelihood of 
+              the model (for model comparison)
+        
+    """
+
+    def cond(carry):
+        _, _, state, *_k = carry
+        return state.lmbda < 1
+
+    #    
+    @jax.jit
+    def one_step(carry):                
+        cov_prev, i, state, k, curr_log_likelihood = carry
+        k, subk = jax.random.split(k, 2)
+        state, info = smc_kernel(subk, state)    
+        particles_flat = ravel_state(state)
+        cov = jnp.cov(particles_flat.T)
+        return cov, i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment
+
+    #
+    particles_flat = ravel_state(initial_state)
+    p = particles_flat.shape[1]
+    covs, n_iter, final_state, _, lml = jax.lax.while_loop(cond, one_step, 
+                                                      (jnp.eye(p), 0, initial_state, rng_key, 0))
+
+    return covs, n_iter, final_state, lml
+
+#
 
 def smc_inference_loop_trace(rng_key: PRNGKey, 
                              smc_kernel: Callable, 
@@ -52,22 +107,103 @@ def smc_inference_loop_trace(rng_key: PRNGKey,
     #
     initial_trace = tree_map(lambda l: jnp.zeros((max_iters, *l.shape)), 
                             initial_state.particles)
+    
+    initial_temperature = jnp.zeros((max_iters, ))
 
     @jax.jit
     def one_step(carry):                
-        i, state, k, curr_log_likelihood, trace = carry
+        i, state, k, curr_log_likelihood, temperature, trace = carry
         k, subk = jax.random.split(k, 2)
         state, info = smc_kernel(subk, state)     
         trace = tree_map(lambda x, y: x.at[i].set(y), trace, state.particles)   
-        return i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment, trace
+        temperature = temperature.at[i].set(state.lmbda)
+        return i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment, temperature, trace
 
     #
-    n_iter, final_state, _, info, trace = jax.lax.while_loop(cond, one_step, 
-                                                      (0, initial_state, rng_key, 0, initial_trace))
+    n_iter, final_state, _, info, temperature, trace = jax.lax.while_loop(cond, 
+                                                                          one_step, 
+                                                                          (0, initial_state, rng_key, 0, initial_temperature, initial_trace))
     
     n_iter = int(n_iter)
     trace = tree_map(lambda l: l[0:n_iter], trace)
-    return n_iter, final_state, info, trace
+    temperature = temperature[0:n_iter]
+    return n_iter, final_state, info, trace, temperature
+
+
+#
+def smc_inference_loop_trace_adaptive_mutations(rng_key: PRNGKey, 
+                             smc_kernel: Callable, 
+                             initial_state,
+                             max_iters=200):
+    """The sequential Monte Carlo loop.
+
+    Args:
+        key: 
+            The jax.random.PRNGKey
+        smc_kernel: 
+            The SMC kernel object (e.g. SMC, tempered SMC or 
+                    adaptive-tempered SMC)
+        initial_state: 
+            The initial state for each particle
+    Returns:
+        n_iter: int
+            The number of tempering steps
+        final_state: 
+            The final state of each of the particles
+        info: SMCinfo
+            the SMC info object which contains the log marginal likelihood of 
+              the model (for model comparison)
+        
+    """
+
+    def cond(carry):
+        _, _, state, *_k = carry
+        return state.lmbda < 1
+
+    #
+    initial_trace = tree_map(lambda l: jnp.zeros((max_iters, *l.shape)), 
+                            initial_state.particles)    
+    initial_temperature = jnp.zeros((max_iters, ))
+
+    p = ravel_state(initial_state).shape[1]    
+    initial_covs = jnp.zeros((max_iters, p, p))
+    initial_covs = initial_covs.at[0].set(jnp.eye(p))
+    initial_acceptance_rates = jnp.zeros((max_iters, ))
+    
+    @jax.jit
+    def one_step(carry):                
+        covs, i, state, k, curr_log_likelihood, temperature, trace, acceptance_rates = carry
+        k, subk = jax.random.split(k, 2)
+
+        # We compute the covariance of the *previous* particle front
+        particles_flat = ravel_state(state)
+        cov = jnp.cov(particles_flat.T)
+        covs = covs.at[i].set(cov)
+        state, info = smc_kernel(subk, state) 
+        acceptance_rates = acceptance_rates.at[i].set(jnp.mean(info.update_info.acceptance_rate.flatten()))  
+        trace = tree_map(lambda x, y: x.at[i].set(y), trace, state.particles)   
+        temperature = temperature.at[i].set(state.lmbda)
+        
+        return covs, i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment, temperature, trace, acceptance_rates
+
+    #       
+    covs, n_iter, final_state, _, lml, temperature, trace, acceptance_rates = jax.lax.while_loop(cond, 
+                                                                                one_step, 
+                                                                                (initial_covs, 
+                                                                                 0, 
+                                                                                 initial_state, 
+                                                                                 rng_key, 
+                                                                                 0, 
+                                                                                 initial_temperature,
+                                                                                 initial_trace,
+                                                                                 initial_acceptance_rates))
+        
+    n_iter = int(n_iter)
+    trace = tree_map(lambda l: l[0:n_iter], trace)
+    temperature = temperature[0:n_iter]
+    acceptance_rates = acceptance_rates[0:n_iter]
+    covs = covs[0:n_iter]
+    return covs, n_iter, final_state, lml, trace, temperature, acceptance_rates
 
 
 #

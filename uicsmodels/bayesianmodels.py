@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from uicsmodels.sampling.inference import inference_loop, smc_inference_loop, smc_inference_loop_trace
+from uicsmodels.sampling.inference import inference_loop, smc_inference_loop, smc_inference_loop_trace, smc_inference_loop_adaptive_steps, smc_inference_loop_trace_adaptive_mutations
 from uicsmodels.sampling.inference import update_metropolis
 
 from abc import ABC, abstractmethod
@@ -188,9 +188,13 @@ class BayesianModel(ABC):
                     position = state.position.copy()
                     loglikelihood_fn_ = self.loglikelihood_fn()
                     logprior_fn_ = self.logprior_fn()
-                    logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
+                    # logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
+                    # It appears we were tempering twice - here and in the Blackjax SMC routine
+                    # Note that when using Gibbs sampling, the `logdensity` is not used for sampling, and so the temperature must be incorporated into the Gibbs function - 
+                    # The particle weighting is still correct though.
+                    logdensity = lambda state: loglikelihood_fn_(state) + logprior_fn_(state)
                     new_position, info_ = apply_mcmc_kernel(key, logdensity, position)
-                    return GibbsState(position=new_position), None  
+                    return GibbsState(position=new_position), info_  
 
                 #
                 kernel_type = sampling_parameters.get('kernel')
@@ -210,15 +214,24 @@ class BayesianModel(ABC):
             )
             num_particles = sampling_parameters.get('num_particles', 1_000)
             include_trace = sampling_parameters.get('include_trace', False)
+            adaptive_mutations = sampling_parameters.get('adaptive_mutations', False)
             initial_particles = self.init_fn(key_init,
                                              num_particles=num_particles)
             initial_smc_state = smc.init(initial_particles.position)   
+
+            if adaptive_mutations:
+                print('Adaptive mutations are enabled')
+                smc_output = smc_inference_loop_trace_adaptive_mutations(key_inference,
+                                                smc.step,
+                                                initial_smc_state)
+                covs, num_iter, particles, marginal_likelihood, trace, temperature, acceptance_rates = smc_output
+
             
             if include_trace:
                 smc_output = smc_inference_loop_trace(key_inference,
                                                       smc.step,
                                                       initial_smc_state)
-                num_iter, particles, marginal_likelihood, trace = smc_output
+                num_iter, particles, marginal_likelihood, trace, temperature = smc_output
             else:
                 smc_output = smc_inference_loop(key_inference,
                                                 smc.step,
@@ -228,8 +241,11 @@ class BayesianModel(ABC):
             self.particles = particles
             self.marginal_likelihood = marginal_likelihood
 
+            if adaptive_mutations:
+                return particles, num_iter, marginal_likelihood, covs, trace, temperature, acceptance_rates
+
             if include_trace:
-                return particles, num_iter, marginal_likelihood, trace
+                return particles, num_iter, marginal_likelihood, trace, temperature
             return particles, num_iter, marginal_likelihood
         elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
@@ -267,7 +283,7 @@ class BayesianModel(ABC):
             return self.particles.particles
         elif mode == 'mcmc' and hasattr(self, 'states'):
             return self.states.position
-        raise ValueError('No inference has been performed')
+         
 
     #
     def plot_priors(self, axes=None):
