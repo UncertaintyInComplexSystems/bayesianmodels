@@ -188,11 +188,8 @@ class BayesianModel(ABC):
                     position = state.position.copy()
                     loglikelihood_fn_ = self.loglikelihood_fn()
                     logprior_fn_ = self.logprior_fn()
-                    # logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-                    # It appears we were tempering twice - here and in the Blackjax SMC routine
-                    # Note that when using Gibbs sampling, the `logdensity` is not used for sampling, and so the temperature must be incorporated into the Gibbs function - 
-                    # The particle weighting is still correct though.
-                    logdensity = lambda state: loglikelihood_fn_(state) + logprior_fn_(state)
+                    logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
+                    # logdensity = lambda state: loglikelihood_fn_(state) + logprior_fn_(state)
                     new_position, info_ = apply_mcmc_kernel(key, logdensity, position)
                     return GibbsState(position=new_position), info_  
 
