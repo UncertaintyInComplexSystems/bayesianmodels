@@ -152,7 +152,7 @@ class SpectralMixture(jk.base.AbstractKernel):
     #
 
     def cross_covariance(self, params: Dict, x, y):
-        """Computes the discontinuous cross-covariance.
+        r"""Computes the discontinuous cross-covariance.
 
         The spectral mixture kernel is defined as
 

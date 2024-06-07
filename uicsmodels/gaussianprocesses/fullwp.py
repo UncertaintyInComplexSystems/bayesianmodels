@@ -59,7 +59,7 @@ def cov_default_recursive(cov_fn, defaults = None):
 
 class FullLatentWishartModel(FullLatentGPModel):
 
-    """The latent Wishart process model.
+    r"""The latent Wishart process model.
 
     The generative model is given by:
 
