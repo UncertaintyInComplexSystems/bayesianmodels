@@ -76,9 +76,9 @@ def sample_predictive(key: PRNGKey,
 
     if obs_noise is not None:
         if jnp.isscalar(obs_noise) or jnp.ndim(obs_noise) == 0:
-            diagonal_noise = obs_noise * jnp.eye(x.shape[0],)
+            diagonal_noise = obs_noise**2 * jnp.eye(x.shape[0], )
         else:
-            diagonal_noise = jnp.diagflat(obs_noise)
+            diagonal_noise = jnp.diagflat(obs_noise)**2
     else:
         diagonal_noise = 0
 
