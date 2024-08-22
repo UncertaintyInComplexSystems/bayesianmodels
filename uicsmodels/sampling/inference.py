@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from jax import Array
 from jax.typing import ArrayLike
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
+from jax.random import PRNGKey
 from jax.tree_util import tree_flatten, tree_map
 from jax.flatten_util import ravel_pytree
 

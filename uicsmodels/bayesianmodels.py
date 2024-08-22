@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 import jax.random as jrnd
-from jax.random import PRNGKeyArray as PRNGKey
+from jax.random import PRNGKey
 from typing import Any, Union, NamedTuple, Dict, Any, Iterable, Mapping, Callable
 from jaxtyping import Float
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
@@ -267,10 +267,9 @@ class BayesianModel(ABC):
                                     step_fn,
                                     initial_state,
                                     num_burn + num_samples)
-
             # remove burn-in
-            self.states = tree_map(lambda x: x[num_burn::num_thin], states)
-            return states
+            self.states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
+            return self.states
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 
