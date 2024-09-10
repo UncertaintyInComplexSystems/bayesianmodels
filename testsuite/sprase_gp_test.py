@@ -15,7 +15,7 @@ from scipy import signal
 import jax
 from jax.config import config
 config.update("jax_enable_x64", True)  # crucial for Gaussian processes
-config.update("jax_debug_nans", True)
+config.update("jax_debug_nans", False)
 config.update("jax_debug_infs", True)
 config.update("jax_disable_jit", False)
 
@@ -358,10 +358,13 @@ def plot_smc(x, y, particles, ground_truth, title, folder, inducing_points=True)
             title=title+f'\nposterior inducing points $Z$')
 
 
-def plot_predictive_f(key, x, y, x_true, f_true, predictive_fn, x_pred, title, folder):
+def plot_predictive_f(
+        key, 
+        points_x, points_y, points_label, points_color,
+        x_true, f_true, predictive_fn, x_pred, title, folder):
     _, key_pred = jrnd.split(key)
     
-    f_pred = predictive_fn(key_pred, x_pred)
+    y_pred = predictive_fn(key_pred, x_pred)
 
     # setup plotting
     fig, axes = plt.subplots(
@@ -369,19 +372,19 @@ def plot_predictive_f(key, x, y, x_true, f_true, predictive_fn, x_pred, title, f
         sharex=True, sharey=True, 
         constrained_layout=True)
 
-    # plot each particle
-    num_particles = f_pred.shape[0]
+    # ax0; plot each particle
+    num_particles = y_pred.shape[0]
     ax = axes[0]
     for i in jnp.arange(0, num_particles, step=10):
         ax.plot(
-            x_pred, f_pred[i, :], 
-            alpha=0.1, color='tab:blue', zorder=2)
+            x_pred, y_pred[i, :], color='tab:blue', 
+            alpha=0.1, zorder=2, label='' if i>0 else 'particle')
 
-    # mean and HDI over particles
+    # ax1; mean and HDI over particles
     ax = axes[1]
-    f_mean = jnp.mean(f_pred, axis=0)
-    f_hdi_lower = jnp.percentile(f_pred, q=2.5, axis=0)
-    f_hdi_upper = jnp.percentile(f_pred, q=97.5, axis=0)
+    f_mean = jnp.mean(y_pred, axis=0)
+    f_hdi_lower = jnp.percentile(y_pred, q=2.5, axis=0)
+    f_hdi_upper = jnp.percentile(y_pred, q=97.5, axis=0)
     ax.plot(
         x_pred, f_mean, 
         color='tab:blue', lw=2, zorder=2, alpha=0.3,
@@ -393,7 +396,7 @@ def plot_predictive_f(key, x, y, x_true, f_true, predictive_fn, x_pred, title, f
     # True f, observations and others for all axis
     for ax in axes.flatten():
         ax.plot(x_true, f_true, 'k', label=r'true $f$', zorder=-1, alpha=0.5)
-        ax.plot(x, y, 'x', label='obs / inducing points', color='black', alpha=0.5)
+        ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
         ax.set_ylim([-2, 2])
         ax.set_xlabel(r'$x$')
         ax.legend()
@@ -505,7 +508,7 @@ def latent_gp_inference(
         folder=path,
         inducing_points=False)
     plot_predictive_f(
-        key=key, x=x, y=y, 
+        key=key, points_x=x, points_y=y, 
         x_true=x, f_true=ground_truth.get('f'),
         predictive_fn=model.predict_f,
         x_pred=jnp.linspace(-2.5, 2.5, num=250),
@@ -564,7 +567,7 @@ def sparse_gp_inference(
                 dx.Normal(loc=0.0, scale=1.0), 
                 tfb.Exp())),
             
-        inducing_inputs_Z=dict( 
+        inducing_inputs_Z=dict(
             mean=dx.Deterministic(
                 loc=jnp.zeros(shape=model_parameter['num_inducing_points'])),
             scale=dx.Deterministic(
@@ -596,16 +599,22 @@ def sparse_gp_inference(
         x, y, particles.particles, ground_truth, 
         title=f'Sparse GP' + sub_title,
         folder=path)
-    # TODO: Include predictive F again.
-    # plot_predictive_f(
-    #     key=key, x=x, y=y, 
-    #     x_true=x, f_true=ground_truth.get('f'),
-    #     predictive_fn=gp_sparse.predict_f,
-    #     x_pred=jnp.linspace(-2.5, 2.5, num=250),
-    #     title='Sparse GP\npredictive f',
-    #     folder=path)
-    # z = jnp.mean(particles.particles['Z'], axis=0)
-    # u = jnp.mean(particles.particles['u'], axis=0)
+    
+    z = jnp.mean(particles.particles['Z'], axis=0)
+    u = jnp.mean(particles.particles['u'], axis=0)
+    plot_predictive_f(
+        key=key,
+        points_x=z, points_y=u, 
+        points_label='inducing points (mean)', points_color='red',
+        x_true=x, f_true=ground_truth.get('f'),
+        predictive_fn=gp_sparse.predict_f,
+        x_pred=jnp.linspace(-2.5, 2.5, num=250),
+        title='Sparse GP\npredictive',
+        folder=path)
+
+    z = jnp.mean(particles.particles['Z'], axis=0)
+    u = jnp.mean(particles.particles['u'], axis=0)
+
     # plot_predictive_f(
     #     key=key, x=z, y=u, # TODO: x and y need a better name as they have nothing to do with the predictive itself, they are only used for plotting.
     #     x_true=x, f_true=ground_truth.get('f'),
@@ -646,6 +655,8 @@ def main(args):
     # parameters 
     num_runs = int(config['DEFAULT']['num_runs'])
     data_type = config['DEFAULT']['data']
+    # note = config['DEFAULT']['note']
+    note = config['DEFAULT'].get('Note', '')
 
     # Everything in the config file is encoded as a string.
     # Thus any numerical parameters need to be translated into their correct data type. 
@@ -661,7 +672,7 @@ def main(args):
 
 
     # add a 'note' to the run-folder name
-    note = 'implementing'
+    # note = 'implementing'
     #note += f'_{model_parameter["num_inducing_points"]}-inducing'
     #note += f'_{sampling_parameter["num_particles"]}_{sampling_parameter["num_mcmc_steps"]}-smc'
     #note += f'_{data_type}'
@@ -689,7 +700,6 @@ def main(args):
     random_random_seeds = jrnd.randint(
         jrnd.PRNGKey(23), [num_runs], 0, jnp.iinfo(jnp.int32).max)
     
-
     def run_model(
             seeds, id: str, 
             num_runs: int, 
@@ -710,7 +720,7 @@ def main(args):
 
         ## inference for each seed
         for i in range(num_runs):
-            logging.info('')  # intentionally left blank
+            print('')  # intentionally left blank
             logging.info(f'run: {i} | seed: {seeds[i]}')
             inference_fn(
                 seeds[i], 

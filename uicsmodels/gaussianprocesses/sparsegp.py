@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
 from blackjax import elliptical_slice, rmh
+from jax.debug import print
 
 from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
@@ -213,7 +214,7 @@ class SparseGPModel(FullGPModel):
         # eval. pdf
         log_prob = dx.Normal(means, vars + sigma).log_prob(self.y) 
 
-        # NOTE I could use vmap to get the diag of the cross-covariance instead of computing the whole cross-covariance myself.
+        # TODO use vmap to get the diag of the cross-covariance instead of computing the whole cross-covariance myself. Other solutions are also fine.
 
         return jnp.sum(log_prob)
 
@@ -296,8 +297,8 @@ class SparseGPModel(FullGPModel):
             def logdensity_fn_Z(z):
                 log_pdf = 0
         
-                # P(Z)
-                log_pdf += jnp.sum(dx.Normal(
+                # P(Z) # TODO Change to use self.param_priors
+                log_pdf += jnp.sum(dx.Normal( 
                     loc=Z_params['mean'],
                     scale=Z_params['scale']).log_prob(z))
 
@@ -497,77 +498,150 @@ class SparseGPModel(FullGPModel):
         #
         return logprior_fn_
 
+
     # TODO implement predictive
     def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
+        """ see Rossi eq. 16
+        """
+
+        # jax.debug.print('\n\n')
+        # jax.debug.print('predict_f sample keys {d}', d=list(samples.keys()))
+        # for k in samples.keys():
+        #     if isinstance(samples[k], dict):
+        #         jax.debug.print('{k}: {d}', k=k, d=list(samples[k].keys()))
+        #         for kk in samples[k].keys():
+        #             jax.debug.print('    {k}: {d}', k=kk, d=samples[k][kk].shape)
+        #     else:
+        #         jax.debug.print('{k}: {d}', k=k, d=samples[k].shape)
+        # jax.debug.print('\n\n')
+
+        
+        def print_matrix(l:list):  # TODO: Remove, just for debugging
+            for a in l:  
+                jax.debug.print('{t}, {s}', 
+                                t=type(a), s=a.shape)
+
+
+        def sample_predictive(
+                key: PRNGKey,
+                x: Array,
+                y: Array,
+                z: Array,
+                xs: Array,  # x*
+                cov_params: Dict = None,
+                likelihood = None):
+            """Sample latent f for new points x_pred given one posterior sample.
+            """
+            
+            def compute_cov(in1, in2, jitter=True):
+                """ Helper function for more consise code down the line
+                """
+                cov = self.cov_fn.cross_covariance(
+                    params=cov_params, x=in1, y=in2)
+                if jitter:
+                    cov += JITTER * jnp.eye(*cov.shape)
+                return cov
+
+            def compute_ab_invbb_ba(ab, bb, use_cholesky:bool = False):
+                if use_cholesky:
+                    L = jnp.linalg.cholesky(bb)
+                    v = jnp.linalg.solve(L, ab.T)
+                    return jnp.dot(v.T, v)
+                else:
+                    return jnp.dot(ab, jnp.linalg.solve(bb, ab.T))
+
+            # compute needed covariance matricies 
+            cov_XX = compute_cov(x, x)  # shape: (N, N)
+            cov_ZZ = compute_cov(z, z)  # shape: (M, M)
+            cov_XZ = compute_cov(x, z)  # shape: (N, M)
+            cov_XsXs = compute_cov(xs, xs)  # shape: (num_targets, num_targets)
+            cov_XsZ = compute_cov(xs, z)  # shape: (num_targets, M)
+
+            # compute alpha
+            diag_noise = likelihood['obs_noise'] * jnp.eye(*cov_XX.shape)
+
+            XZ_ZZ_ZX = jnp.dot(
+                cov_XZ, 
+                jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ)))
+            alpha = (cov_XX - XZ_ZZ_ZX + diag_noise) * jnp.eye(*cov_XX.shape)  # keeping only the values along the diagonal  # NOTE: Used jnp.eye instead of jnp.diag.
+            # print('alpha any NaNs: {b}', b=jnp.any(jnp.isnan(alpha)))
+
+            # compute sigma fitc
+            sigma_fitc = cov_ZZ + jnp.dot(
+                jnp.transpose(cov_XZ), 
+                jnp.linalg.solve(alpha, cov_XZ))  # NOTE: in the paper this equation is inverted. I left it out to compute the inverse implicitly when Sigma is used. 
+
+            # compute mu fitc
+            mu_fitc = jnp.dot(
+                cov_XsZ,
+                jnp.dot(
+                    jnp.linalg.solve(sigma_fitc, jnp.transpose(cov_XZ)),
+                    jnp.linalg.solve(alpha, jnp.transpose(y))
+                )
+            )  # shape (num_targets, )
+
+            # compute variance (sigma^2) fitc
+
+            # XsZ_ZZ_ZXs = jnp.dot(
+            #     cov_XsZ,
+            #     jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XsZ)))
+            # XsZ_ZZ_ZXs += JITTER * jnp.eye(*Xs_ZZ_ZXs.shape)
+            XsZ_ZZ_ZXs = compute_ab_invbb_ba(
+                cov_XsZ, cov_ZZ, use_cholesky=False)            
+
+            # XsZ_sigma_ZXs = jnp.dot(
+            #     cov_XsZ,
+            #     jnp.linalg.solve(sigma_fitc, jnp.transpose(cov_XsZ)))
+            # Xs_sigma_ZXs += JITTER * jnp.eye(*Xs_sigma_ZXs.shape)
+            XsZ_sigma_ZXs = compute_ab_invbb_ba(
+                cov_XsZ, sigma_fitc, use_cholesky=False) 
+            
+            var_fitc = cov_XsXs - XsZ_ZZ_ZXs + XsZ_sigma_ZXs  # shape (num_targets, num_targets)
+            var_fitc += JITTER * jnp.eye(*var_fitc.shape)
+
+            # draw samples
+            if jnp.ndim(xs) == 1:
+                L = jnp.linalg.cholesky(var_fitc)
+                u = jrnd.normal(key, shape=(len(xs),))
+                pred = mu_fitc + jnp.dot(L, u)
+            else:
+                raise NotImplementedError(f'Shape of target must be (n,)',
+                f'but {xs.shape} was provided.')
+
+            return pred
+
+        # extract parameters and samples from data structure
         samples = self.get_monte_carlo_samples()
-        num_particles = samples['f'].shape[0]
-        key_samples = jrnd.split(key, num_particles)
+        
+        cov_params = samples['kernel']
+        Z = samples['Z']
+        likelihood = samples['likelihood']
 
-        mean_params = samples.get('mean', {})
-        cov_params = samples.get('kernel', {})
-        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
+        num_particles = Z.shape[0]
+
         cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+        likelihood_in_axes = jax.tree_map(lambda l: 0, likelihood)
 
-        sample_fun = lambda key, mean_params, cov_params, target: sample_predictive(
-            key, 
-            mean_params=mean_params, 
-            cov_params=cov_params, 
-            mean_fn=self.mean_fn,
-            cov_fn=self.cov_fn, 
-            x=self.X, 
-            z=x_pred, 
-            target=target)
-
-        keys = jrnd.split(key, num_particles)
-        target_pred = jax.vmap(
-            jax.jit(sample_fun), 
-            in_axes=(0, mean_param_in_axes, cov_param_in_axes, 0))(
-                keys,
-                mean_params,
-                cov_params, 
-                samples['f'])
-
-        return target_pred
-
-    # TODO implement predictive
-    # see Rossi eq. 16
-    # x* is x_pred
-    def predict_f_from_u(self, key: PRNGKey, x_pred: ArrayTree):
-        samples = self.get_monte_carlo_samples()
-        num_particles = samples['f'].shape[0]
-        key_samples = jrnd.split(key, num_particles)
-
-        mean_params = samples.get('mean', {})
-        cov_params = samples.get('kernel', {})
-        mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
-        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
-
-        Z = samples.get('Z')  # shape: (num_particles, num_inducing_points)
-        Z_in_axes = jax.tree_map(lambda l: 0, Z)
-
-        sample_fun = lambda key, mean_params, cov_params, Z, target: sample_predictive(
-            key,
-            x=Z, 
-            z=x_pred,
-            target=target,
-            mean_params=mean_params, 
-            cov_params=cov_params, 
-            mean_fn=self.mean_fn,
-            cov_fn=self.cov_fn,
-            obs_noise=None
+        sample_fun = lambda key, cov_params, z, noise: sample_predictive(
+            key = key,
+            x = self.X,
+            y = self.y,
+            z = z,
+            cov_params = cov_params,
+            likelihood = noise,
+            xs = x_pred  # x*
             )
         
         keys = jrnd.split(key, num_particles)
-        target_pred = jax.vmap(
+        y_pred = jax.vmap(
             jax.jit(sample_fun), 
-            in_axes=(0, mean_param_in_axes, cov_param_in_axes, Z_in_axes, 0))(
+            in_axes=(0, cov_param_in_axes, 0, likelihood_in_axes))(
                 keys,
-                mean_params,
                 cov_params,
                 Z,
-                samples['u'])
+                likelihood)
 
-        return target_pred
+        return y_pred
 
     #
     def predict_y(self, key, x_pred):
@@ -768,6 +842,7 @@ class FullSparseGPModel(FullGPModel):
         return GibbsState(initial_position)
 
         #
+
 
     def gibbs_fn(
             self, key, state, 
@@ -1007,6 +1082,7 @@ class FullSparseGPModel(FullGPModel):
 
         return GibbsState(position=position), None 
             # We return None to satisfy SMC; this needs to be filled with acceptance information
+
 
     def loglikelihood_fn(self) -> Callable:
         """Returns the log-likelihood function for the model given a state.
