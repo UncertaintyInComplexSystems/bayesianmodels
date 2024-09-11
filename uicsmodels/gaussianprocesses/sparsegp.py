@@ -103,20 +103,20 @@ class SparseGPModel(FullGPModel):
 
 
             # sample M inducing inputs Z
-            samples_Z = dx.Normal(   
-                loc=Z_params['mean'],
-                scale=Z_params['scale']).sample(seed=key_sample_z)
+            # samples_Z = dx.Normal(   
+            #     loc=Z_params['mean'],
+            #     scale=Z_params['scale']).sample(seed=key_sample_z)
 
             # true evenly-spaced Z in x domain allows drawing true u samples
-            # lin_Z = jnp.linspace(
-            #     jnp.min(self.X), 
-            #     jnp.max(self.X), 
-            #     self.m)
-            # # find and select closest values in X-domain
-            # samples_Z_idx = jnp.searchsorted(
-            #    self.X.flatten(), lin_Z)
-            # samples_Z = self.X.flatten()[samples_Z_idx]
-            # samples_Z = lin_Z
+            lin_Z = jnp.linspace(
+                jnp.min(self.X), 
+                jnp.max(self.X), 
+                self.m)
+            # find and select closest values in X-domain
+            samples_Z_idx = jnp.searchsorted(
+               self.X.flatten(), lin_Z)
+            samples_Z = self.X.flatten()[samples_Z_idx]
+            samples_Z = lin_Z
 
 
             # Sample inducing variables u
@@ -423,8 +423,8 @@ class SparseGPModel(FullGPModel):
         key, subkey = jrnd.split(key)
         position['u'] = sample_u(key, position)
         
-        key, subkey = jrnd.split(key)
-        position['Z'] = sample_z(subkey, position)
+        #key, subkey = jrnd.split(key)
+        #position['Z'] = sample_z(subkey, position)
 
         key, subkey = jrnd.split(key)
         position['kernel'] = sample_theta(subkey, position)

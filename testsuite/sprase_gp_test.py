@@ -105,7 +105,7 @@ def setup_results_folder_and_logging(
 
 ## generate toy data
 
-def generate_smooth_data(path_plot=None, n=100, obs_noise=0.3, seed=12345):
+def generate_smooth_gp(path_plot=None, n=100, obs_noise=0.3, seed=12345):
     key_data = jrnd.PRNGKey(seed)  # 1106, 5368, 8928, 5609
 
     lengthscale_ = 0.05
@@ -334,8 +334,16 @@ def plot_smc(x, y, particles, ground_truth, title, folder, inducing_points=True)
             f'./{folder}/' + title.replace(' ', '_').replace('\n', '_').replace('$', ''))
         plt.close()
 
+    def plot_each_particles(particles, title=''):
+        num_particles, num_inducing_points = particles.shape
 
-    plot_smc_posterior(title=title+'\nposterior f')
+        plt.suptitle(title)
+        plt.savefig(
+            f'./{folder}/' + title.replace(' ', '_').replace('\n', '_').replace('$', ''))
+        plt.close()
+
+
+    # plot_smc_posterior(title=title+'\nposterior f')
 
     plot_hyperparameter_histograms(
     particles=particles.get('kernel', {}),
@@ -359,22 +367,24 @@ def plot_smc(x, y, particles, ground_truth, title, folder, inducing_points=True)
 
 
 def plot_predictive_f(
-        key, 
+        key, particles,
         points_x, points_y, points_label, points_color,
         x_true, f_true, predictive_fn, x_pred, title, folder):
     _, key_pred = jrnd.split(key)
     
+    logging.info('generate predictive')
     y_pred = predictive_fn(key_pred, x_pred)
 
     # setup plotting
     fig, axes = plt.subplots(
-        nrows=2, ncols=1, figsize=(12, 7), 
+        nrows=3, ncols=1, figsize=(12, 10.5), 
         sharex=True, sharey=True, 
         constrained_layout=True)
 
     # ax0; plot each particle
     num_particles = y_pred.shape[0]
     ax = axes[0]
+    ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
     for i in jnp.arange(0, num_particles, step=10):
         ax.plot(
             x_pred, y_pred[i, :], color='tab:blue', 
@@ -382,6 +392,7 @@ def plot_predictive_f(
 
     # ax1; mean and HDI over particles
     ax = axes[1]
+    ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
     f_mean = jnp.mean(y_pred, axis=0)
     f_hdi_lower = jnp.percentile(y_pred, q=2.5, axis=0)
     f_hdi_upper = jnp.percentile(y_pred, q=97.5, axis=0)
@@ -392,11 +403,28 @@ def plot_predictive_f(
     ax.fill_between(
         x_pred, f_hdi_lower, f_hdi_upper,
         alpha=0.2, color='tab:blue', lw=0)
+    
+    # ax2; inducing points each particle
+    ax = axes[2]
+    ax.errorbar(
+        points_x, points_y, 
+        xerr= jnp.std(particles['Z'], axis=0), 
+        yerr= jnp.std(particles['u'], axis=0), 
+        color=colors['magenta'],
+        fmt='None',
+        label='inducing point\nstandard deviation')
+    # for i in jnp.arange(0, num_particles, step=10):
+    #     ax.plot(
+    #         particles['Z'][i, :], particles['u'][i, :],
+    #         'x', 
+    #         label='' if i > 0 else 'particles\ninducing variables', 
+    #         color=colors['red'],
+    #         alpha=0.8,
+    #         zorder=2)
 
     # True f, observations and others for all axis
     for ax in axes.flatten():
         ax.plot(x_true, f_true, 'k', label=r'true $f$', zorder=-1, alpha=0.5)
-        ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
         ax.set_ylim([-2, 2])
         ax.set_xlabel(r'$x$')
         ax.legend()
@@ -408,6 +436,8 @@ def plot_predictive_f(
             f'./{folder}/' + title.replace(' ', '_').replace('\n', '_').replace('$', ''))
     plt.close()
     #axes[0].set_ylabel('Latent GP', rotation=0, ha='right');
+
+    return y_pred
 
 
 ## run algorithms / automatic testing
@@ -438,18 +468,18 @@ def summary_stats_from_log(path_logfile):
 
     exec_times = extract_single_dict_entris_from_log(
         path_logfile, 'execution_time_sec')
-    mse = extract_single_dict_entris_from_log(
-        path_logfile, 'mean_squared_error')
+    # mse = extract_single_dict_entris_from_log(
+    #     path_logfile, 'mean_squared_error')
     
     summary_stats = dict(
         execution_time=dict(
             mean = np.mean(exec_times),
             variance = np.var(exec_times)
             ),
-        mean_squared_error=dict(
-            mean = np.mean(mse),
-            variance = np.var(mse)
-            ),
+        # mean_squared_error=dict(
+        #     mean = np.mean(mse),
+        #     variance = np.var(mse)
+        #     ),
         )
     
     return summary_stats
@@ -594,16 +624,20 @@ def sparse_gp_inference(
 
     # plot results
     logging.info('generate plots')
+
+    logging.info('call plot_smc')
     sub_title = ''
     plot_smc(
         x, y, particles.particles, ground_truth, 
         title=f'Sparse GP' + sub_title,
         folder=path)
     
+    logging.info('call plot_predictive')
     z = jnp.mean(particles.particles['Z'], axis=0)
     u = jnp.mean(particles.particles['u'], axis=0)
-    plot_predictive_f(
+    y_pred = plot_predictive_f(
         key=key,
+        particles = particles.particles,
         points_x=z, points_y=u, 
         points_label='inducing points (mean)', points_color='red',
         x_true=x, f_true=ground_truth.get('f'),
@@ -614,20 +648,14 @@ def sparse_gp_inference(
 
     z = jnp.mean(particles.particles['Z'], axis=0)
     u = jnp.mean(particles.particles['u'], axis=0)
-
-    # plot_predictive_f(
-    #     key=key, x=z, y=u, # TODO: x and y need a better name as they have nothing to do with the predictive itself, they are only used for plotting.
-    #     x_true=x, f_true=ground_truth.get('f'),
-    #     predictive_fn=gp_sparse.predict_f_from_u,
-    #     x_pred=jnp.linspace(-2.5, 2.5, num=250),
-    #     title='Sparse GP\npredictive f from u',
-    #     folder=path)
     
     # pickle data and infernece output for combining the results later
     logging.info('pickle data and inference output')
     to_pickle = dict(
         x = x,
         y = y,
+        z = z,
+        u = u,
         ground_truth = ground_truth,
         initial_particles = initial_particles,
         particles = particles,
@@ -639,13 +667,12 @@ def sparse_gp_inference(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     # compute mean squared error between f particle mean and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+    # def mse(approx, true):
+    #     return jnp.mean(jnp.square(jnp.subtract(approx, true)))
 
-    # TODO: Include MSE again
-    # mse = mse(jnp.mean(particles.particles['f'], axis=0), ground_truth.get('f'))
+    # Compute MSE between true f and particle mean
+    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
-
 
 def main(args):
     # parse config file
@@ -690,7 +717,7 @@ def main(args):
    
     # generate data 
     if data_type == 'gp':
-        data = generate_smooth_data(path_plot=path)
+        data = generate_smooth_gp(path_plot=path)
     if data_type == 'square':
         data = generate_square_data(path_plot=path)
     if data_type == 'chirp':
