@@ -1,6 +1,7 @@
 
 import os
 import argparse
+from time import sleep
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -25,4 +26,7 @@ if __name__ == '__main__':
 
     import sprase_gp_test
     sprase_gp_test.main(args)
-    # sprase_gp_test.main_wip()
+
+    # print('\n finished, idle')
+    # while True:
+    #     sleep(60)

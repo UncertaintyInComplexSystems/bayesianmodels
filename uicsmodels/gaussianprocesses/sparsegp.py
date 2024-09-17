@@ -99,24 +99,27 @@ class SparseGPModel(FullGPModel):
             _, *sub_key = jrnd.split(key, num=4)
             key_sample_z = sub_key[0]
             key_sample_u = sub_key[1]
-            key_sample_f = sub_key[2]
-
 
             # sample M inducing inputs Z
-            # samples_Z = dx.Normal(   
-            #     loc=Z_params['mean'],
-            #     scale=Z_params['scale']).sample(seed=key_sample_z)
+            samples_Z = dx.Normal(   
+                loc=Z_params['mean'],
+                scale=Z_params['scale']).sample(seed=key_sample_z)
+            
+            # sort inducing inputs Z
+            sorted_inducing_indices = jnp.argsort(samples_Z, axis=0)
+            samples_Z = jnp.take_along_axis(
+                samples_Z, sorted_inducing_indices, axis=0)
 
             # true evenly-spaced Z in x domain allows drawing true u samples
-            lin_Z = jnp.linspace(
-                jnp.min(self.X), 
-                jnp.max(self.X), 
-                self.m)
-            # find and select closest values in X-domain
-            samples_Z_idx = jnp.searchsorted(
-               self.X.flatten(), lin_Z)
-            samples_Z = self.X.flatten()[samples_Z_idx]
-            samples_Z = lin_Z
+            # lin_Z = jnp.linspace(
+            #     jnp.min(self.X), 
+            #     jnp.max(self.X), 
+            #     self.m)
+            # # find and select closest values in X-domain
+            # samples_Z_idx = jnp.searchsorted(
+            #    self.X.flatten(), lin_Z)
+            # samples_Z = self.X.flatten()[samples_Z_idx]
+            # samples_Z = lin_Z
 
 
             # Sample inducing variables u
@@ -421,10 +424,15 @@ class SparseGPModel(FullGPModel):
 
 
         key, subkey = jrnd.split(key)
+        position['Z'] = sample_z(subkey, position)
+        sorted_inducing_indices = jnp.argsort(position['Z'])
+        position['Z'] = jnp.take_along_axis(
+            position['Z'], sorted_inducing_indices, axis=0)
+
+        key, subkey = jrnd.split(key)
         position['u'] = sample_u(key, position)
-        
-        #key, subkey = jrnd.split(key)
-        #position['Z'] = sample_z(subkey, position)
+        position['u'] = jnp.take_along_axis(
+            position['u'], sorted_inducing_indices, axis=0)
 
         key, subkey = jrnd.split(key)
         position['kernel'] = sample_theta(subkey, position)
@@ -464,6 +472,7 @@ class SparseGPModel(FullGPModel):
 
 
     # TODO somethingn needs to change here, its using f.
+    # TODO: Is this ever called?
     def logprior_fn(self) -> Callable:
         """Returns the log-prior function for the model given a state.
 
@@ -499,7 +508,7 @@ class SparseGPModel(FullGPModel):
         return logprior_fn_
 
 
-    # TODO implement predictive
+    # TODO rename? 
     def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
         """ see Rossi eq. 16
         """

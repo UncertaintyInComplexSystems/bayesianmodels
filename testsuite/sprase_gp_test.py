@@ -105,28 +105,32 @@ def setup_results_folder_and_logging(
 
 ## generate toy data
 
-def generate_smooth_gp(path_plot=None, n=100, obs_noise=0.3, seed=12345):
+def generate_smooth_gp(
+        path_plot=None, n=100, 
+        lengthscale=0.05, scale=5.0, obs_noise=0.3, seed=12345):
     key_data = jrnd.PRNGKey(seed)  # 1106, 5368, 8928, 5609
 
-    lengthscale_ = 0.05
-    output_scale_ = 5.0
-    x = jnp.linspace(0, 1, n)[:, jnp.newaxis]
+    lengthscale_ = lengthscale
+    output_scale_ = scale
+    x = jnp.linspace(-1, 1, n)[:, jnp.newaxis]
 
     kernel = jk.RBF()
-    K = kernel.cross_covariance(params=dict(lengthscale=lengthscale_,
-                                            variance=output_scale_),
-                                x=x, y=x) + 1e-6*jnp.eye(n)
+    K = kernel.cross_covariance(
+        params=dict(
+            lengthscale=lengthscale_,
+            variance=output_scale_),
+        x=x, y=x) + 1e-6*jnp.eye(n)
 
     L = jnp.linalg.cholesky(K)
     z = jrnd.normal(key_data, shape=(n,))
     f_true = jnp.dot(L, z) + jnp.zeros_like(z)
-    #f_true = (f_true - f_true.min())/ (f_true.max() - f_true.min())
+
     # standerdize data
-    f_true = (f_true - jnp.mean(f_true)) / jnp.std(f_true) 
+    # f_true = (f_true - jnp.mean(f_true)) / jnp.std(f_true) 
     _, obs_key = jrnd.split(key_data)
     y = f_true + obs_noise*jrnd.normal(obs_key, shape=(n,))
     # standerdize data
-    x = (x - jnp.mean(x)) / jnp.std(x)
+    #x = (x - jnp.mean(x)) / jnp.std(x)
 
     ground_truth = dict(
         f=f_true,
@@ -355,25 +359,21 @@ def plot_smc(x, y, particles, ground_truth, title, folder, inducing_points=True)
     title=title+f'\nposterior likelihood')
     #prior_values=[prior_obs_noise_mean])
 
-    if inducing_points:  # HACK: only needed cause this function is not model agnostic.
-        plot_inducing_point_histograms(
-            particles=particles.get('u'),
-            plots_per_row=7,
-            title=title+f'\nposterior inducing points $u$')
-        plot_inducing_point_histograms(
-            particles=particles.get('Z'),
-            plots_per_row=7,
-            title=title+f'\nposterior inducing points $Z$')
+    # if inducing_points:  # HACK: only needed cause this function is not model agnostic.
+    #     plot_inducing_point_histograms(
+    #         particles=particles.get('u'),
+    #         plots_per_row=7,
+    #         title=title+f'\nposterior inducing points $u$')
+    #     plot_inducing_point_histograms(
+    #         particles=particles.get('Z'),
+    #         plots_per_row=7,
+    #         title=title+f'\nposterior inducing points $Z$')
 
 
 def plot_predictive_f(
-        key, particles,
+        particles,
         points_x, points_y, points_label, points_color,
-        x_true, f_true, predictive_fn, x_pred, title, folder):
-    _, key_pred = jrnd.split(key)
-    
-    logging.info('generate predictive')
-    y_pred = predictive_fn(key_pred, x_pred)
+        x_true, f_true, x_pred, y_pred, title, folder):
 
     # setup plotting
     fig, axes = plt.subplots(
@@ -384,11 +384,11 @@ def plot_predictive_f(
     # ax0; plot each particle
     num_particles = y_pred.shape[0]
     ax = axes[0]
-    ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
     for i in jnp.arange(0, num_particles, step=10):
         ax.plot(
             x_pred, y_pred[i, :], color='tab:blue', 
             alpha=0.1, zorder=2, label='' if i>0 else 'particle')
+    ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
 
     # ax1; mean and HDI over particles
     ax = axes[1]
@@ -425,7 +425,7 @@ def plot_predictive_f(
     # True f, observations and others for all axis
     for ax in axes.flatten():
         ax.plot(x_true, f_true, 'k', label=r'true $f$', zorder=-1, alpha=0.5)
-        ax.set_ylim([-2, 2])
+        ax.set_ylim([jnp.min(f_true)-0.5, jnp.max(f_true)+0.5])
         ax.set_xlabel(r'$x$')
         ax.legend()
 
@@ -597,11 +597,11 @@ def sparse_gp_inference(
                 dx.Normal(loc=0.0, scale=1.0), 
                 tfb.Exp())),
             
-        inducing_inputs_Z=dict(
+        inducing_inputs_Z=dict(  # TODO: replace with list of normals using list comprehension, or with multivariate distribution. 
             mean=dx.Deterministic(
                 loc=jnp.zeros(shape=model_parameter['num_inducing_points'])),
             scale=dx.Deterministic(
-                loc=jnp.ones(shape=model_parameter['num_inducing_points']))))
+                loc=jnp.ones(shape=model_parameter['num_inducing_points']) * jnp.std(x))))
 
     # setup model
     gp_sparse = SparseGPModel(
@@ -621,6 +621,26 @@ def sparse_gp_inference(
         sampling_parameters=sampling_parameter)
     logging.info(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
+    logging.info(
+        'execution_time_min: ' + f'{(timer() - start)/60}')
+    
+
+    # jax.debug.print('Z prior sorting: {d}', d=particles.particles['Z'][0, :])
+    # jax.debug.print('u prior sorting: {d}', d=particles.particles['u'][0, :])
+    # sorted_inducing_indices = jnp.argsort(particles.particles['Z'], axis=1)
+    # particles.particles['Z'] = jnp.take_along_axis(
+    #     particles.particles['Z'], sorted_inducing_indices, axis=1)
+    # particles.particles['u'] = jnp.take_along_axis(
+    #     particles.particles['u'], sorted_inducing_indices, axis=1)
+    # jax.debug.print('Z past sorting: {d}', d=particles.particles['Z'][0, :])
+    # jax.debug.print('u past sorting: {d}', d=particles.particles['u'][0, :])
+    # jax.debug.breakpoint()
+
+
+    logging.info('generate predictive')
+    key, key_pred = jrnd.split(key)
+    x_pred = jnp.linspace(-1.5, 1.5, num=250)
+    y_pred = gp_sparse.predict_f(key_pred, x_pred)
 
     # plot results
     logging.info('generate plots')
@@ -636,13 +656,12 @@ def sparse_gp_inference(
     z = jnp.mean(particles.particles['Z'], axis=0)
     u = jnp.mean(particles.particles['u'], axis=0)
     y_pred = plot_predictive_f(
-        key=key,
         particles = particles.particles,
         points_x=z, points_y=u, 
-        points_label='inducing points (mean)', points_color='red',
+        points_label='inducing points (mean)', points_color=colors['red'],
         x_true=x, f_true=ground_truth.get('f'),
-        predictive_fn=gp_sparse.predict_f,
-        x_pred=jnp.linspace(-2.5, 2.5, num=250),
+        x_pred=x_pred,
+        y_pred=y_pred,
         title='Sparse GP\npredictive',
         folder=path)
 
@@ -656,10 +675,13 @@ def sparse_gp_inference(
         y = y,
         z = z,
         u = u,
+        x_pred = x_pred,
+        y_pred = y_pred,
         ground_truth = ground_truth,
         initial_particles = initial_particles,
         particles = particles,
-        marginal_likelihood=marginal_likelihood)
+        marginal_likelihood = marginal_likelihood)
+    
     for dkey in to_pickle:
         logging.debug('pickle ' + path+f'{dkey}.pickle')
         with open(path+f'{dkey}.pickle', 'wb') as file_handle:
@@ -673,6 +695,7 @@ def sparse_gp_inference(
     # Compute MSE between true f and particle mean
     # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+
 
 def main(args):
     # parse config file
@@ -714,26 +737,33 @@ def main(args):
     with open(f'{path}config.ini', 'w') as f:
         config.write(f)
 
-   
-    # generate data 
-    if data_type == 'gp':
-        data = generate_smooth_gp(path_plot=path)
-    if data_type == 'square':
-        data = generate_square_data(path_plot=path)
-    if data_type == 'chirp':
-        data = generate_chirp_data(f0=1, f1=6, path_plot=path)
+    def gen_data(path, seed=12345):
+        # generate data 
+        if data_type == 'gp':
+            return generate_smooth_gp(
+                path_plot=path, 
+                lengthscale=float(config['data.gp']['lengthscale']),
+                scale=float(config['data.gp']['scale']),
+                obs_noise=float(config['data.gp']['obs_noise']),
+                seed=seed)
+        if data_type == 'square':
+            return generate_square_data(path_plot=path)
+        if data_type == 'chirp':
+            return generate_chirp_data(f0=1, f1=6, path_plot=path)
 
-     # generate random seeds for inference
+
+    # data = gen_data(path=path)
+    
+    # generate random seeds for inference
     random_random_seeds = jrnd.randint(
         jrnd.PRNGKey(23), [num_runs], 0, jnp.iinfo(jnp.int32).max)
     
     def run_model(
             seeds, id: str, 
             num_runs: int, 
-            inference_fn: Callable, 
-            data:dict, 
+            inference_fn: Callable,
             root_path:str):
-        
+
         ## setup results folder and logging
         sub_folder_names = [f'{id}_seed_{s}' for s in seeds]
         paths = setup_results_folder_and_logging(
@@ -748,6 +778,7 @@ def main(args):
         ## inference for each seed
         for i in range(num_runs):
             print('')  # intentionally left blank
+            data = gen_data(path=paths[i], seed=seeds[i])
             logging.info(f'run: {i} | seed: {seeds[i]}')
             inference_fn(
                 seeds[i], 
@@ -773,7 +804,6 @@ def main(args):
         id='sparseGP',
         num_runs = num_runs,
         inference_fn=sparse_gp_inference,
-        data=data,
         root_path=path)
 
     # run latent gp
@@ -784,5 +814,4 @@ def main(args):
     #     inference_fn=latent_gp_inference,
     #     data=data,
     #     root_path=path)
-
 
