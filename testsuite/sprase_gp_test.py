@@ -408,7 +408,7 @@ def plot_predictive_f(
     ax = axes[2]
     ax.errorbar(
         points_x, points_y, 
-        xerr= jnp.std(particles['Z'], axis=0), 
+        xerr= jnp.std(particles['inducing_points']['Z'], axis=0), 
         yerr= jnp.std(particles['u'], axis=0), 
         color=colors['magenta'],
         fmt='None',
@@ -596,12 +596,17 @@ def sparse_gp_inference(
             obs_noise = dx.Transformed(
                 dx.Normal(loc=0.0, scale=1.0), 
                 tfb.Exp())),
-            
-        inducing_inputs_Z=dict(  # TODO: replace with list of normals using list comprehension, or with multivariate distribution. 
-            mean=dx.Deterministic(
-                loc=jnp.zeros(shape=model_parameter['num_inducing_points'])),
-            scale=dx.Deterministic(
-                loc=jnp.ones(shape=model_parameter['num_inducing_points']) * jnp.std(x))))
+                
+        inducing_points=dict(
+            Z=dx.Normal(
+                loc=jnp.zeros(shape=model_parameter['num_inducing_points']),
+                scale=jnp.ones(
+                    shape=model_parameter['num_inducing_points']) * jnp.var(x))  #NOTE: using jnp.var instead of jnp.std to produce Z's within the data range (-1, 1). 
+                    )
+        
+                )
+    
+    
 
     # setup model
     gp_sparse = SparseGPModel(
@@ -624,17 +629,12 @@ def sparse_gp_inference(
     logging.info(
         'execution_time_min: ' + f'{(timer() - start)/60}')
     
-
-    # jax.debug.print('Z prior sorting: {d}', d=particles.particles['Z'][0, :])
-    # jax.debug.print('u prior sorting: {d}', d=particles.particles['u'][0, :])
-    # sorted_inducing_indices = jnp.argsort(particles.particles['Z'], axis=1)
-    # particles.particles['Z'] = jnp.take_along_axis(
-    #     particles.particles['Z'], sorted_inducing_indices, axis=1)
-    # particles.particles['u'] = jnp.take_along_axis(
-    #     particles.particles['u'], sorted_inducing_indices, axis=1)
-    # jax.debug.print('Z past sorting: {d}', d=particles.particles['Z'][0, :])
-    # jax.debug.print('u past sorting: {d}', d=particles.particles['u'][0, :])
-    # jax.debug.breakpoint()
+    # Sort Z and u following Z.
+    sorted_inducing_indices = jnp.argsort(particles.particles['inducing_points']['Z'], axis=1)
+    particles.particles['inducing_points']['Z'] = jnp.take_along_axis(
+        particles.particles['inducing_points']['Z'], sorted_inducing_indices, axis=1)
+    particles.particles['u'] = jnp.take_along_axis(
+        particles.particles['u'], sorted_inducing_indices, axis=1)
 
 
     logging.info('generate predictive')
@@ -653,7 +653,7 @@ def sparse_gp_inference(
         folder=path)
     
     logging.info('call plot_predictive')
-    z = jnp.mean(particles.particles['Z'], axis=0)
+    z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
     u = jnp.mean(particles.particles['u'], axis=0)
     y_pred = plot_predictive_f(
         particles = particles.particles,
@@ -665,7 +665,7 @@ def sparse_gp_inference(
         title='Sparse GP\npredictive',
         folder=path)
 
-    z = jnp.mean(particles.particles['Z'], axis=0)
+    z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
     u = jnp.mean(particles.particles['u'], axis=0)
     
     # pickle data and infernece output for combining the results later
@@ -673,8 +673,6 @@ def sparse_gp_inference(
     to_pickle = dict(
         x = x,
         y = y,
-        z = z,
-        u = u,
         x_pred = x_pred,
         y_pred = y_pred,
         ground_truth = ground_truth,
@@ -688,13 +686,12 @@ def sparse_gp_inference(
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # compute mean squared error between f particle mean and true f
-    # def mse(approx, true):
-    #     return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+    # compute mean squared error between predictive and true f
+    def mse(approx, true):
+        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
 
-    # Compute MSE between true f and particle mean
-    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
-    # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+    #mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    #logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
 
 def main(args):
