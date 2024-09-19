@@ -96,9 +96,9 @@ class SparseGPModel(FullGPModel):
             """
             Sample Z and u
             """
-            _, *sub_key = jrnd.split(key, num=4)
-            key_sample_z = sub_key[0]
-            key_sample_u = sub_key[1]
+            _, *sub_key = jrnd.split(key, num=3)
+            key_sample_u = sub_key[0]
+            key_sample_z = sub_key[1]
 
             # sample M inducing inputs Z
             # samples_Z = dx.Normal(   
@@ -120,8 +120,6 @@ class SparseGPModel(FullGPModel):
             #    self.X.flatten(), lin_Z)
             # samples_Z = self.X.flatten()[samples_Z_idx]
             # samples_Z = lin_Z
-
-            # TODO: a bit of an ugly hack. needs to be cleaned up 
             samples_Z = Z_params['Z']
 
             # Sample inducing variables u
@@ -349,6 +347,7 @@ class SparseGPModel(FullGPModel):
                 p(theta) p(u | Z, theta) p(y | u, Z, theta)
             """
             cov_params = position_.get('kernel', {})
+            inducing_points = position_.get('inducing_points', {})
             likelihood_params = position_.get('likelihood', {})
 
             def logdensity_fn_cov(theta_):
@@ -360,18 +359,18 @@ class SparseGPModel(FullGPModel):
                     log_pdf += jnp.sum(self.param_priors['kernel'][param].log_prob(val))
                 
                 # p(u | Z, theta)
-                mean_u = self.mean_fn.mean(params=None, x=position_['inducing_points']['Z'])
+                mean_u = self.mean_fn.mean(params=None, x=inducing_points['Z'])
                 cov_u = self.cov_fn.cross_covariance(
                     params=theta_,
-                    x=position_['inducing_points']['Z'],
-                    y=position_['inducing_points']['Z'])
+                    x=inducing_points['Z'],
+                    y=inducing_points['Z'])
                 cov_u = JITTER * jnp.eye(*cov_u.shape)
                 log_pdf += dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position_['u'])
 
                 # p(y | u, Z, theta)
                 log_pdf += temperature*self.loglikelihood_fn_fitc(
                     u=position_['u'],
-                    Z=position_['inducing_points']['Z'], 
+                    Z=inducing_points['Z'], 
                     theta=theta_, 
                     sigma=likelihood_params['obs_noise'])
                 
@@ -430,14 +429,9 @@ class SparseGPModel(FullGPModel):
 
         key, subkey = jrnd.split(key)
         position['inducing_points']['Z'] = sample_z(subkey, position)
-        # sorted_inducing_indices = jnp.argsort(position['Z'])
-        # position['Z'] = jnp.take_along_axis(
-        #     position['Z'], sorted_inducing_indices, axis=0)
 
         key, subkey = jrnd.split(key)
         position['u'] = sample_u(key, position)
-        # position['u'] = jnp.take_along_axis(
-        #     position['u'], sorted_inducing_indices, axis=0)
 
         key, subkey = jrnd.split(key)
         position['kernel'] = sample_theta(subkey, position)
@@ -477,7 +471,9 @@ class SparseGPModel(FullGPModel):
 
 
     # TODO somethingn needs to change here, its using f.
-    # TODO: Is this ever called?
+    # TODO: Is this ever called? 
+    #       -> its references in SMC
+    #       -> but I never see the debug print I put below. 
     def logprior_fn(self) -> Callable:
         """Returns the log-prior function for the model given a state.
 
@@ -487,7 +483,7 @@ class SparseGPModel(FullGPModel):
             A function that computes the log-prior of the model given a state.
 
         """
-        
+
         def logprior_fn_(state: GibbsState) -> Float:
             jax.debug.print('Using logprior_fn!!!')
             position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
@@ -529,11 +525,6 @@ class SparseGPModel(FullGPModel):
         #         jax.debug.print('{k}: {d}', k=k, d=samples[k].shape)
         # jax.debug.print('\n\n')
 
-        
-        def print_matrix(l:list):  # TODO: Remove, just for debugging
-            for a in l:  
-                jax.debug.print('{t}, {s}', 
-                                t=type(a), s=a.shape)
 
 
         def sample_predictive(

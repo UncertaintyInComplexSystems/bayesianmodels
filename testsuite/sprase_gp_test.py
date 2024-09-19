@@ -32,12 +32,21 @@ tfd = tfp.distributions
 tfb = tfp.bijectors
 
 from uicsmodels.gaussianprocesses.sparsegp import SparseGPModel
-from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
+from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel
+from uicsmodels.gaussianprocesses.fullgp import FullMarginalGPModel
 
 
-# optional package for debugging
-from icecream import ic
-ic.configureOutput(includeContext=True)
+## defining colors and applying styling for plots
+
+def plt_stylelize():
+    plt.rc('axes', titlesize=18)        # fontsize of the axes title
+    plt.rc('axes', labelsize=16)        # fontsize of the x and y labels
+    plt.rc('xtick', labelsize=14)       # fontsize of the tick labels
+    plt.rc('ytick', labelsize=14)       # fontsize of the tick labels
+    plt.rc('legend', fontsize=16)       # legend fontsize
+    plt.rc('figure', titlesize=20)      # fontsize of the figure title
+    plt.style.use('Solarize_Light2')
+plt_stylelize()
 
 # solarized colors
 colors = {
@@ -51,15 +60,8 @@ colors = {
     'cyan': '#2aa198',
     'green':'#859900'}
 
-def plt_stylelize():
-    plt.rc('axes', titlesize=18)        # fontsize of the axes title
-    plt.rc('axes', labelsize=16)        # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=14)       # fontsize of the tick labels
-    plt.rc('ytick', labelsize=14)       # fontsize of the tick labels
-    plt.rc('legend', fontsize=16)       # legend fontsize
-    plt.rc('figure', titlesize=20)      # fontsize of the figure title
-    plt.style.use('Solarize_Light2')
-plt_stylelize()
+
+## utility fuctions
 
 def setup_results_folder_and_logging(
         root_path=False, 
@@ -101,6 +103,48 @@ def setup_results_folder_and_logging(
     logging.info('Hello cruel world.')
 
     return paths_sub
+
+
+def summary_stats_from_log(path_logfile):
+    # parse log-file
+    import ast
+
+    def extract_single_dict_entris_from_log(file_path, var_name):
+        file = open(file_path,'r')
+
+        results = []
+        while True:
+            next_line = file.readline()
+            if not next_line:
+                break
+            curr_line = next_line.strip()
+
+            if var_name in curr_line:
+                # get message from log entry
+                d = curr_line.split('[INFO]')[-1].strip()
+                # generate dict from message
+                dict = ast.literal_eval(d)
+                results.append(dict.get(var_name))
+        
+        file.close()
+        return results
+
+    exec_times = extract_single_dict_entris_from_log(
+        path_logfile, 'execution_time_sec')
+    mse = extract_single_dict_entris_from_log(
+        path_logfile, 'mean_squared_error')
+    
+    summary_stats = dict(
+        execution_time_s=dict(
+            mean = np.mean(exec_times)
+            ),
+        mean_squared_error=dict(
+            mean = np.mean(mse),
+            variance = np.var(mse)
+            ),
+        )
+    
+    return summary_stats
 
 
 ## generate toy data
@@ -431,49 +475,7 @@ def plot_predictive_f(
     #axes[0].set_ylabel('Latent GP', rotation=0, ha='right');
 
 
-## run algorithms / automatic testing
-
-def summary_stats_from_log(path_logfile):
-    # parse log-file
-    import ast
-
-    def extract_single_dict_entris_from_log(file_path, var_name):
-        file = open(file_path,'r')
-
-        results = []
-        while True:
-            next_line = file.readline()
-            if not next_line:
-                break
-            curr_line = next_line.strip()
-
-            if var_name in curr_line:
-                # get message from log entry
-                d = curr_line.split('[INFO]')[-1].strip()
-                # generate dict from message
-                dict = ast.literal_eval(d)
-                results.append(dict.get(var_name))
-        
-        file.close()
-        return results
-
-    exec_times = extract_single_dict_entris_from_log(
-        path_logfile, 'execution_time_sec')
-    mse = extract_single_dict_entris_from_log(
-        path_logfile, 'mean_squared_error')
-    
-    summary_stats = dict(
-        execution_time_s=dict(
-            mean = np.mean(exec_times)
-            ),
-        mean_squared_error=dict(
-            mean = np.mean(mse),
-            variance = np.var(mse)
-            ),
-        )
-    
-    return summary_stats
-
+## run inference and plotting for different models.
 
 def latent_gp_inference(
     seed,
@@ -698,9 +700,7 @@ def sparse_gp_inference(
                 scale=jnp.ones(
                     shape=model_parameter['num_inducing_points']) * jnp.var(x))  #NOTE: using jnp.var instead of jnp.std to produce Z's within the data range (-1, 1). 
                     )
-        
                 )
-    
     
     # setup model
     gp_sparse = SparseGPModel(
@@ -788,10 +788,12 @@ def sparse_gp_inference(
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
 
+
 def main(args):
     # parse config file
     config = configparser.ConfigParser()
-    config.read(args.CONFIG_FILE)
+    config.read(args.CONFIG_FILE)  
+    # TODO need warnings if config was not found, or if parameters are missing.
 
     # parameters 
     num_runs = int(config['DEFAULT']['num_runs'])
@@ -864,6 +866,7 @@ def main(args):
         for i in range(num_runs):
             print('')  # intentionally left blank
             data = gen_data(path=paths[i], seed=seeds[i])
+            # data = gen_data(path=paths[i])
             logging.info(f'run: {i} | seed: {seeds[i]}')
             inference_fn(
                 seeds[i], 
@@ -885,14 +888,14 @@ def main(args):
 
 
     # sparse gp
-    # run_model(
-    #     seeds=random_random_seeds,
-    #     id='sparseGP',
-    #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference,
-    #     root_path=path)
+    run_model(
+        seeds=random_random_seeds,
+        id='sparseGP',
+        num_runs = num_runs,
+        inference_fn=sparse_gp_inference,
+        root_path=path)
 
-    # # run latent gp
+    # run latent gp
     run_model(
         seeds=random_random_seeds,
         id='latentGP',

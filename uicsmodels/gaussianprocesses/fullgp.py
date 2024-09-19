@@ -24,7 +24,6 @@ from blackjax import elliptical_slice, rmh
 
 jitter = 1e-6
 
-
 class FullGPModel(BayesianModel):
 
     def __init__(self, X, y,

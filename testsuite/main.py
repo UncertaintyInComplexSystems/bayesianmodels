@@ -7,9 +7,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
     parser.add_argument('-gpu', dest='GPU', type=int, nargs='+')
-    # parser.add_argument(
-    #     '-data', dest='DATA', type=str, 
-    #     choices=['smooth', 'square', 'chirp'])
     parser.add_argument(
         '-config', dest='CONFIG_FILE', type=str)
     
