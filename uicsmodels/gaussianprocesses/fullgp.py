@@ -163,7 +163,6 @@ class FullLatentGPModel(FullGPModel):
         cov_params = initial_position.get('kernel', {})
         mean_param_in_axes = jax.tree_map(lambda l: 0, mean_params)
         cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
-        print(cov_params['lengthscale'].shape)
 
         if num_particles > 1:
             keys = jrnd.split(key, num_particles)                
