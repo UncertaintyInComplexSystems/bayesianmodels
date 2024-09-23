@@ -64,8 +64,7 @@ class SparseGPModel(FullGPModel):
         self.m = num_inducing_points  # TODO: Instead of passing, infer from prior over inducing inputs
         self.f_true = f_true  # NOTE: Only used to create 'perfect' inital inducing points for debugging and analysis.
 
-        super().__init__(X, y, cov_fn, mean_fn, priors)        
-
+        super().__init__(X, y, cov_fn, mean_fn, priors)
 
     #   
     def init_fn(self, key, num_particles=1):
@@ -174,7 +173,7 @@ class SparseGPModel(FullGPModel):
 
     
     # log-density that is used in very Gibbs update step
-    def loglikelihood_fn_fitc(self, u, Z, theta, sigma):
+    def _loglikelihood_fn_fitc(self, u, Z, theta, sigma):
         """
         log-density log p(y | u, Z, theta), used in very Gibbs update step
         defined in the Rossi et al. 2021, eq. 14, 15, 17
@@ -191,11 +190,6 @@ class SparseGPModel(FullGPModel):
         # QUESTION add jitter to covariances?
         
         # compute needed covariance matricies 
-        cov_XX = self.cov_fn.cross_covariance(
-            params=theta,
-            x=self.X, y=self.X)
-        cov_XX += JITTER * jnp.eye(*cov_XX.shape)
-
         cov_ZZ = self.cov_fn.cross_covariance(
             params=theta,
             x=Z, y=Z)
@@ -246,7 +240,6 @@ class SparseGPModel(FullGPModel):
         # get current gibbs-state
         position = state.position.copy()
 
-
         def sample_u(key, position_:GibbsState):
             """
             Sample inducing points u. 
@@ -277,7 +270,7 @@ class SparseGPModel(FullGPModel):
             cov_u += JITTER * jnp.eye(*cov_u.shape)
 
             def logdensity_fn_u(u_): 
-                return temperature*self.loglikelihood_fn_fitc(
+                return temperature*self._loglikelihood_fn_fitc(
                     u=u_,
                     Z=position_['inducing_points']['Z'], 
                     theta=cov_params, 
@@ -320,7 +313,7 @@ class SparseGPModel(FullGPModel):
                     cov_u).log_prob(position_['u'])
 
                 # p(y | u, Z, theta)
-                log_pdf += temperature*self.loglikelihood_fn_fitc(
+                log_pdf += temperature*self._loglikelihood_fn_fitc(
                     u=position_['u'],
                     Z=z, 
                     theta=cov_params, 
@@ -368,7 +361,7 @@ class SparseGPModel(FullGPModel):
                 log_pdf += dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position_['u'])
 
                 # p(y | u, Z, theta)
-                log_pdf += temperature*self.loglikelihood_fn_fitc(
+                log_pdf += temperature*self._loglikelihood_fn_fitc(
                     u=position_['u'],
                     Z=inducing_points['Z'], 
                     theta=theta_, 
@@ -406,7 +399,7 @@ class SparseGPModel(FullGPModel):
                     log_pdf += jnp.sum(self.param_priors['likelihood'][param].log_prob(val))
 
                 # p(y | u, Z, theta)
-                log_pdf += temperature*self.loglikelihood_fn_fitc(
+                log_pdf += temperature*self._loglikelihood_fn_fitc(
                     u=position_['u'],
                     Z=position_['inducing_points']['Z'], 
                     theta=cov_params, 
@@ -460,7 +453,7 @@ class SparseGPModel(FullGPModel):
             position = getattr(state, 'position', state)
             phi = state.get('likelihood', {})  # QUESTION: How is this different to getattr?
 
-            return self.loglikelihood_fn_fitc(
+            return self._loglikelihood_fn_fitc(
                     u=position['u'],
                     Z=position['inducing_points']['Z'], 
                     theta=position.get('kernel', {}), 

@@ -521,34 +521,34 @@ def latent_gp_inference(
     logging.info(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
 
-    logging.info('generate predictive')
-    key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=100)
-    y_pred = model.predict_f(key_pred, x_pred)
+    # logging.info('generate predictive')
+    # key, key_pred = jrnd.split(key)
+    # x_pred = jnp.linspace(-1, 1, num=750)
+    # y_pred = model.predict_f(key_pred, x_pred)
 
-    # plot results
-    logging.info('generate plots')
+    # # plot results
+    # logging.info('generate plots')
 
-    logging.info('call plot_smc')
-    sub_title = ''
-    plot_smc(
-        x, y, particles.particles, ground_truth, 
-        title=f'Latent GP' + sub_title,
-        folder=path,
-        inducing_points=False)
+    # logging.info('call plot_smc')
+    # sub_title = ''
+    # plot_smc(
+    #     x, y, particles.particles, ground_truth, 
+    #     title=f'Latent GP' + sub_title,
+    #     folder=path,
+    #     inducing_points=False)
     
-    logging.info('call plot_predictive')
-    plot_predictive_f(
-        particles = particles.particles,
-        points_x=x, points_y=y, 
-        points_label='data points', points_color=colors['red'],
-        x_true=x, f_true=ground_truth.get('f'),
-        x_pred=x_pred,
-        y_pred=y_pred,
-        title='Latent GP\npredictive',
-        folder=path)
+    # logging.info('call plot_predictive')
+    # plot_predictive_f(
+    #     particles = particles.particles,
+    #     points_x=x, points_y=y, 
+    #     points_label='data points', points_color=colors['red'],
+    #     x_true=x, f_true=ground_truth.get('f'),
+    #     x_pred=x_pred,
+    #     y_pred=y_pred,
+    #     title='Latent GP\npredictive',
+    #     folder=path)
     
-    # pickle data and infernece output for combining the results later
+    # # pickle data and infernece output for combining the results later
     logging.info('pickle data and inference output')
     to_pickle = dict(
         x = x,
@@ -563,12 +563,14 @@ def latent_gp_inference(
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # compute mean squared error between f particle mean and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+    # # compute mean squared error between f particle mean and true f
+    # def mse(approx, true):
+    #     return jnp.mean(jnp.square(jnp.subtract(approx, true)))
 
-    mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
-    logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+
+    del model
 
 
 def marginal_gp_inference(
@@ -615,34 +617,34 @@ def marginal_gp_inference(
     logging.info(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
 
-    logging.info('generate predictive')
-    key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=100)
-    y_pred = model.predict_f(key_pred, x_pred)
+    # logging.info('generate predictive')
+    # key, key_pred = jrnd.split(key)
+    # x_pred = jnp.linspace(-1, 1, num=250)
+    # y_pred = model.predict_f(key_pred, x_pred)
 
-    # plot results
-    logging.info('generate plots')
+    # # plot results
+    # logging.info('generate plots')
 
-    logging.info('call plot_smc')
-    sub_title = ''
-    plot_smc(
-        x, y, particles.particles, ground_truth, 
-        title=f'Latent GP' + sub_title,
-        folder=path,
-        inducing_points=False)
+    # logging.info('call plot_smc')
+    # sub_title = ''
+    # plot_smc(
+    #     x, y, particles.particles, ground_truth, 
+    #     title=f'Latent GP' + sub_title,
+    #     folder=path,
+    #     inducing_points=False)
     
-    logging.info('call plot_predictive')
-    plot_predictive_f(
-        particles = particles.particles,
-        points_x=x, points_y=y, 
-        points_label='data points', points_color=colors['red'],
-        x_true=x, f_true=ground_truth.get('f'),
-        x_pred=x_pred,
-        y_pred=y_pred,
-        title='Latent GP\npredictive',
-        folder=path)
+    # logging.info('call plot_predictive')
+    # plot_predictive_f(
+    #     particles = particles.particles,
+    #     points_x=x, points_y=y, 
+    #     points_label='data points', points_color=colors['red'],
+    #     x_true=x, f_true=ground_truth.get('f'),
+    #     x_pred=x_pred,
+    #     y_pred=y_pred,
+    #     title='Latent GP\npredictive',
+    #     folder=path)
     
-    # pickle data and infernece output for combining the results later
+    # # pickle data and infernece output for combining the results later
     logging.info('pickle data and inference output')
     to_pickle = dict(
         x = x,
@@ -657,12 +659,14 @@ def marginal_gp_inference(
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # compute mean squared error between f particle mean and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+    # # compute mean squared error between f particle mean and true f
+    # def mse(approx, true):
+    #     return jnp.mean(jnp.square(jnp.subtract(approx, true)))
 
-    mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
-    logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+
+    del model
 
 
 def sparse_gp_inference(
@@ -717,6 +721,143 @@ def sparse_gp_inference(
     initial_particles, particles, _, marginal_likelihood = gp_sparse.inference(
         key_inference, 
         mode='gibbs-in-smc', 
+        sampling_parameters=sampling_parameter)
+    logging.info(
+        '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
+    logging.info(
+        'execution_time_min: ' + f'{(timer() - start)/60}')
+    
+    # Sort Z and u following Z.
+    sorted_inducing_indices = jnp.argsort(particles.particles['inducing_points']['Z'], axis=1)
+    particles.particles['inducing_points']['Z'] = jnp.take_along_axis(
+        particles.particles['inducing_points']['Z'], sorted_inducing_indices, axis=1)
+    particles.particles['u'] = jnp.take_along_axis(
+        particles.particles['u'], sorted_inducing_indices, axis=1)
+
+
+    # logging.info('generate predictive')
+    # key, key_pred = jrnd.split(key)
+    # x_pred = jnp.linspace(-1, 1, num=750)
+    # y_pred = gp_sparse.predict_f(key_pred, x_pred)
+
+    # # plot results
+    # logging.info('generate plots')
+
+    # logging.info('call plot_smc')
+    # sub_title = ''
+    # plot_smc(
+    #     x, y, particles.particles, ground_truth, 
+    #     title=f'Sparse GP' + sub_title,
+    #     folder=path)
+    
+    # logging.info('call plot_predictive')
+    # z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
+    # u = jnp.mean(particles.particles['u'], axis=0)
+    # plot_predictive_f(
+    #     particles = particles.particles,
+    #     points_x=z, points_y=u, 
+    #     points_label='inducing points (mean)', points_color=colors['red'],
+    #     x_true=x, f_true=ground_truth.get('f'),
+    #     x_pred=x_pred,
+    #     y_pred=y_pred,
+    #     title='Sparse GP\npredictive',
+    #     folder=path)
+
+    # z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
+    # u = jnp.mean(particles.particles['u'], axis=0)
+    
+    # # pickle data and infernece output for combining the results later
+    logging.info('pickle data and inference output')
+    to_pickle = dict(
+        x = x,
+        y = y,
+        # x_pred = x_pred,
+        # y_pred = y_pred,
+        ground_truth = ground_truth,
+        initial_particles = initial_particles,
+        particles = particles,
+        marginal_likelihood = marginal_likelihood)
+    
+    for dkey in to_pickle:
+        logging.debug('pickle ' + path+f'{dkey}.pickle')
+        with open(path+f'{dkey}.pickle', 'wb') as file_handle:
+            pickle.dump(
+                to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # # compute mean squared error between predictive and true f
+    # def mse(approx, true):
+    #     return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+
+    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+
+    del gp_sparse
+
+
+def sparse_gp_inference_hemMCMC(
+    seed,
+    model_parameter:dict, 
+    sampling_parameter:dict,
+    data:dict, path:str):
+
+    """
+    Using stochastic gradient Hamiltonian Monte Carlo
+    """
+
+
+    key = jrnd.PRNGKey(seed)
+    x = data['x']
+    y = data['y']
+    ground_truth = data['ground_truth']
+    logging.info(f'model parameter: {model_parameter}')
+    logging.info(f'sampling parameter: {sampling_parameter}')
+
+    # prior
+    priors = dict(
+        kernel=dict(
+            lengthscale = dx.Transformed( 
+                dx.Normal(loc=0.0, scale=1.0),
+                tfb.Exp()), 
+            variance = dx.Transformed( 
+                dx.Normal(loc=0.0, scale=1.0),
+                tfb.Exp())),
+
+        likelihood=dict(
+            obs_noise = dx.Transformed(
+                dx.Normal(loc=0.0, scale=1.0), 
+                tfb.Exp())),
+                
+        inducing_points=dict(
+            Z=dx.Normal(
+                loc=jnp.zeros(shape=model_parameter['num_inducing_points']),
+                scale=jnp.ones(
+                    shape=model_parameter['num_inducing_points']) * jnp.var(x))  #NOTE: using jnp.var instead of jnp.std to produce Z's within the data range (-1, 1). 
+                    )
+                )
+    
+    # setup model
+    gp_sparse = SparseGPModel(
+        x, y, 
+        cov_fn=jk.RBF(), 
+        priors=priors, 
+        num_inducing_points=model_parameter['num_inducing_points'],
+        f_true=ground_truth.get('f'))  
+
+    # NUTS sampler parameter
+    from blackjax import nuts
+    sampling_parameter['kernel'] = nuts
+    sampling_parameter['kernel_parameters'] = dict(
+        # logdensity_fn = gp_sparse.loglikelihood_fn, 
+        step_size = 1e-3, 
+        inverse_mass_matrix = None)
+
+    # inference
+    logging.info('run inference')
+    key, key_inference = jrnd.split(key)
+    start = timer()
+    initial_particles, particles, _, marginal_likelihood = gp_sparse.inference(
+        key_inference, 
+        mode='mcmc', 
         sampling_parameters=sampling_parameter)
     logging.info(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
@@ -788,7 +929,6 @@ def sparse_gp_inference(
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
 
-
 def main(args):
     # parse config file
     config = configparser.ConfigParser()
@@ -832,7 +972,8 @@ def main(args):
                 lengthscale=float(config['data.gp']['lengthscale']),
                 scale=float(config['data.gp']['scale']),
                 obs_noise=float(config['data.gp']['obs_noise']),
-                seed=seed)
+                seed=seed,
+                n=100)
         if data_type == 'square':
             return generate_square_data(path_plot=path)
         if data_type == 'chirp':
@@ -876,23 +1017,39 @@ def main(args):
                 path=paths[i])
 
         ## summary stats
-        summary_stats = summary_stats_from_log(root_path + id + '.log')
-        logging.info(f'summary_stats: {summary_stats}')
+        # summary_stats = summary_stats_from_log(root_path + id + '.log')
+        # logging.info(f'summary_stats: {summary_stats}')
 
-        print(f'\n{id} | summary stats')
-        for var in summary_stats:
-            print(f' {var}')
-            for stat in summary_stats[var]:
-                print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
+        # print(f'\n{id} | summary stats')
+        # for var in summary_stats:
+        #     print(f' {var}')
+        #     for stat in summary_stats[var]:
+        #         print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
         print()
 
 
     # sparse gp
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='sparseGP',
+    #     num_runs = num_runs,
+    #     inference_fn=sparse_gp_inference,
+    #     root_path=path)
+    
+    # sparse gp MCMC nuts
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='sparseGP_mcmc',
+    #     num_runs = num_runs,
+    #     inference_fn=sparse_gp_inference_hemMCMC,
+    #     root_path=path)
+
+    # run marginal gp
     run_model(
         seeds=random_random_seeds,
-        id='sparseGP',
+        id='marginalGP',
         num_runs = num_runs,
-        inference_fn=sparse_gp_inference,
+        inference_fn=marginal_gp_inference,
         root_path=path)
 
     # run latent gp
@@ -901,12 +1058,4 @@ def main(args):
         id='latentGP',
         num_runs = num_runs,
         inference_fn=latent_gp_inference,
-        root_path=path)
-
-    # run latent gp
-    run_model(
-        seeds=random_random_seeds,
-        id='marginalGP',
-        num_runs = num_runs,
-        inference_fn=marginal_gp_inference,
         root_path=path)
