@@ -7,6 +7,6 @@ setup(
     install_requires=[
         'blackjax @ git+https://github.com/Hesterhuijsdens/blackjax.git',
         'jaxkern @ git+https://github.com/JaxGaussianProcesses/JaxKern.git',
-        'distrax==0.1.4'
+        'distrax==0.1.5'
     ]
 )

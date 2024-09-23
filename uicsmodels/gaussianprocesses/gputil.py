@@ -1,3 +1,21 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
+from uicsmodels.gaussianprocesses.meanfunctions import Zero
+from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
+
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping, Tuple
 import jax
 from jaxtyping import Float, Array
@@ -6,36 +24,30 @@ import jax.numpy as jnp
 import jax.random as jrnd
 import jaxkern as jk
 import distrax as dx
-from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
-from uicsmodels.gaussianprocesses.meanfunctions import Zero
-from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
+
 
 from jax.tree_util import tree_flatten, tree_unflatten
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
+__all__ = ['sample_predictive', 
+           'sample_prior', 
+           'update_gaussian_process', 
+           'update_gaussian_process_cov_params', 
+           'update_gaussian_process_mean_params', 
+           'update_gaussian_process_obs_params']
+
 jitter = 1e-6
 
-def plot_dist(ax, x, samples, **kwargs):
-    f_mean = jnp.mean(samples, axis=0)
-    f_hdi_lower = jnp.percentile(samples, q=2.5, axis=0)
-    f_hdi_upper = jnp.percentile(samples, q=97.5, axis=0)
-    color = kwargs.get('color', 'tab:blue')
-    ax.plot(x, f_mean, lw=2, **kwargs)
-    ax.fill_between(x.flatten(), f_hdi_lower, f_hdi_upper,
-                    alpha=0.2, lw=0, color=color)
-
-#
-
 def sample_predictive(key: PRNGKey,
-                         x: Array,
-                         z: Array,
-                         target: Array,
-                         cov_fn: Callable,
-                         mean_params: Dict = None,
-                         cov_params: Dict = None,
-                         mean_fn: Callable = Zero(),
-                         obs_noise = None):
+                      x: Array,
+                      z: Array,
+                      target: Array,
+                      cov_fn: Callable,
+                      mean_params: Dict = None,
+                      cov_params: Dict = None,
+                      mean_fn: Callable = Zero(),
+                      obs_noise = None):
     """Sample latent f for new points x_pred given one posterior sample.
 
     See Rasmussen & Williams. We are sampling from the posterior predictive for
@@ -64,9 +76,9 @@ def sample_predictive(key: PRNGKey,
 
     if obs_noise is not None:
         if jnp.isscalar(obs_noise) or jnp.ndim(obs_noise) == 0:
-            diagonal_noise = obs_noise * jnp.eye(x.shape[0],)
+            diagonal_noise = obs_noise**2 * jnp.eye(x.shape[0], )
         else:
-            diagonal_noise = jnp.diagflat(obs_noise)
+            diagonal_noise = jnp.diagflat(obs_noise)**2
     else:
         diagonal_noise = 0
 
@@ -106,13 +118,13 @@ def sample_predictive(key: PRNGKey,
 
 #
 def sample_prior(key: PRNGKey,
-                    x: Array,
-                    cov_params: Dict,
-                    cov_fn: Callable,
-                    mean_params: Dict = None,
-                    mean_fn: Callable = Zero(),
-                    nd: Tuple[int, ...] = None,
-                    jitter: Float = 1e-6):
+                 x: Array,
+                 cov_params: Dict,
+                 cov_fn: Callable,
+                 mean_params: Dict = None,
+                 mean_fn: Callable = Zero(),
+                 nd: Tuple[int, ...] = None,
+                 jitter: Float = 1e-6):
     """Draw a sample f ~ GP(m, k)
 
     If `nd` is provided, the resulting sample is of shape (n, ) + nd. The mean
@@ -137,17 +149,15 @@ def sample_prior(key: PRNGKey,
     return f
 
 #
-def update_gaussian_process(
-        key: PRNGKey, 
-        f_current: Array, 
-        loglikelihood_fn: Callable, 
-        X: Array,
-        mean_fn: Callable = Zero(),
-        cov_fn: Callable = jk.RBF(),
-        mean_params: Dict = None,
-        cov_params: Dict = None):
-    
-    n = X.shape[0]
+def update_gaussian_process(key: PRNGKey, 
+                            f_current: Array, 
+                            loglikelihood_fn: Callable, 
+                            X: Array,
+                            mean_fn: Callable = Zero(),
+                            cov_fn: Callable = jk.RBF(),
+                            mean_params: Dict = None,
+                            cov_params: Dict = None):
+    n = f_current.shape[0]
     mean = mean_fn.mean(params=mean_params, x=X)
     cov = cov_fn.cross_covariance(params=cov_params, x=X, y=X) + jitter * jnp.eye(n)
     if jnp.ndim(f_current) > 1:
@@ -207,14 +217,16 @@ def update_gaussian_process_cov_params(key: PRNGKey,
 
 #
 def update_gaussian_process_mean_params(key: PRNGKey,
-                                           X: Array,
-                                           f: Array,
-                                           mean_fn: Callable = Zero(),
-                                           cov_fn: Callable = jk.RBF(),
-                                           mean_params: Dict = None,
-                                           cov_params: Dict = None,
-                                           hyperpriors: Dict = None):
+                                        X: Array,
+                                        f: Array,
+                                        mean_fn: Callable = Zero(),
+                                        cov_fn: Callable = jk.RBF(),
+                                        mean_params: Dict = None,
+                                        cov_params: Dict = None,
+                                        hyperpriors: Dict = None):
     """Updates the parameters of a Gaussian process mean function.
+
+    TODO: use same tree-flattening approach as for cov_params
 
     """
 
@@ -245,6 +257,12 @@ def update_gaussian_process_obs_params(key: PRNGKey, y: Array,
                                        likelihood: AbstractLikelihood = Gaussian(),
                                        obs_params: Dict = None,
                                        hyperpriors: Dict = None):
+    """Updates the parameters of the observation model.
+
+    TODO: use same tree-flattening approach as for cov_params
+
+    """
+    
     def logdensity_fn_(obs_params_):
         log_pdf = 0
         for param, val in obs_params_.items():
@@ -255,4 +273,5 @@ def update_gaussian_process_obs_params(key: PRNGKey, y: Array,
     #
     key, subkey = jrnd.split(key)
     return update_metropolis(subkey, logdensity_fn_, obs_params, stepsize=0.01)
- 
+
+# 

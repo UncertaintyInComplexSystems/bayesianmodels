@@ -1,3 +1,18 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import jax
 import jaxkern as jk
 import jax.numpy as jnp
@@ -5,6 +20,8 @@ import jax.random as jrnd
 from typing import Callable, Tuple, Union, NamedTuple, Dict, Any, Optional, List
 from jaxtyping import Array, Float
 from jax.nn import softmax
+
+__all__ = ['DefaultingKernel', 'Brownian', 'SpectralMixture', 'Discontinuous']
 
 def centered_softmax(beta):
     return softmax(jnp.insert(beta, 0, 0.0))
@@ -60,6 +77,10 @@ class DefaultingKernel(jk.base.AbstractKernel):
 #
 
 class Brownian(jk.base.AbstractKernel):
+
+    """A GP covariance function for Brownian motion
+
+    """
 
     def __init__(self, active_dims: Optional[List[int]] = None, name: Optional[str] = "Brownian motion") -> None:
         self.active_dims = active_dims
@@ -131,7 +152,7 @@ class SpectralMixture(jk.base.AbstractKernel):
     #
 
     def cross_covariance(self, params: Dict, x, y):
-        """Computes the discontinuous cross-covariance.
+        r"""Computes the discontinuous cross-covariance.
 
         The spectral mixture kernel is defined as
 
@@ -168,10 +189,7 @@ class SpectralMixture(jk.base.AbstractKernel):
             res = res + w_ * jnp.exp(-2*jnp.pi**2 * tau**2 * nu_) * jnp.cos(2*jnp.pi * tau * mu_)
             return res, el
 
-        #
-        # x = self.slice_input(x)
-        # y = self.slice_input(y)
-        
+        #        
         tau = jnp.sqrt(self.__euclidean_distance_einsum(x, y))
         beta = params['beta']
         w = centered_softmax(beta)
@@ -240,37 +258,3 @@ class Discontinuous(jk.base.AbstractKernel):
     #
 
 #
-class SmoothWalk(jk.base.AbstractKernel):
-    # See Ambrogioni, 2023: https://arxiv.org/abs/2310.02877
-    # To test this, we need to change how we initialize the SMC procedure, as we cannot sample from this improper prior
-    
-    def __init__(self, active_dims: Optional[List[int]] = None, name: Optional[str] = "Smooth walk") -> None:
-        self.active_dims = active_dims
-        self.name = name
-        self._stationary = False
-        self.ndims = 1 if not self.active_dims else len(self.active_dims)
-
-    #
-    def __call__(self, params: Dict, x: Float[Array, "1 D"], y: Float[Array, "1 D"]) -> Float[Array, "1"]:
-        return self.cross_covariance(params, x, y)
-
-    #
-    def cross_covariance(self, params: Dict, x, y) -> Float[Array, "1"]:
-        x = self.slice_input(x)
-        y = self.slice_input(y)
-        n_x = x.shape[0]
-        n_y = y.shape[0]
-        x_mat = jnp.tile(jnp.squeeze(x), (n_y, 1))
-        y_mat = jnp.tile(jnp.squeeze(y), (n_x, 1)).T    
-        diff = x_mat - y_mat    
-        return jnp.squeeze(params['variance'] * -1.0*diff*jnp.tanh(diff / params['lengthscale'])).T
-
-    #
-    def init_params(self, key: Array) -> dict:
-        params = {       
-            "lengthscale": jnp.array([1.0] * self.ndims),
-            "variance": jnp.array([1.0])
-        }
-        return jax.tree_util.tree_map(lambda x: jnp.atleast_1d(x), params)
-
-    #

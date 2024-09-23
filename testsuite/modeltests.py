@@ -22,69 +22,16 @@ from jax.tree_util import tree_flatten, tree_unflatten, tree_flatten_with_path
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
-from uicsmodels.gaussianprocesses.gputil import sample_prior, plot_dist
+from uicsmodels.gaussianprocesses.gputil import sample_prior
 from uicsmodels.gaussianprocesses.hsgp import FullLatentHSGPModel
 from uicsmodels.gaussianprocesses.kernels import Brownian, SpectralMixture, centered_softmax, DefaultingKernel
 from uicsmodels.gaussianprocesses.meanfunctions import Constant
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel, FullMarginalGPModel
-from uicsmodels.gaussianprocesses.likelihoods import Wishart, construct_wishart, tril2vec, construct_wishart_Lvec
+from uicsmodels.gaussianprocesses.likelihoods import Wishart
+from uicsmodels.gaussianprocesses.wputil import construct_wishart, tril2vec, construct_wishart_Lvec
 from uicsmodels.gaussianprocesses.fullwp import FullLatentWishartModel
+from uicsmodels.gaussianprocesses.plotutil import plot_dist, plot_wishart, plot_wishart_dist
 
-#### PLOTTING
-
-
-def plot_wishart(x, Sigma, add_title=False, **kwargs):
-    n, d, _ = Sigma.shape
-    _, axes = plt.subplots(nrows=d, ncols=d, sharex=True, sharey=True,
-                           constrained_layout=True)
-    for i in range(d):
-        for j in range(d):
-            if i <= j:
-                axes[i, j].plot(x, Sigma[:, i, j], **kwargs)
-                if add_title:
-                    axes[i, j].set_title(r'$\Sigma_{{{:d}{:d}}}(t)$'.format(i, j))
-            else:
-                axes[i, j].axis('off')            
-    for ax in axes[-1, :]:
-        ax.set_xlabel(r'$x$')
-    return axes
-
-#
-def plot_wishart_dist(x, Sigma_samples, axes=None, add_title=False, **kwargs):
-    _, n, d, _ = Sigma_samples.shape
-    color = kwargs.get('color', 'tab:blue')
-    if axes is None:
-        _, axes = plt.subplots(nrows=d, ncols=d, sharex=True, sharey=True,
-                            constrained_layout=True)
-    for i in range(d):
-        for j in range(d):
-            if i <= j:
-                plot_dist(axes[i, j],
-                          x,
-                          Sigma_samples[:, :, i, j],
-                          color=color)
-                if add_title:
-                    axes[i, j].set_title(r'$\Sigma_{{{:d}{:d}}}(t)$'.format(i, j))
-            else:
-                axes[i, j].axis('off')
-    for ax in axes[-1, :]:
-        ax.set_xlabel(r'$x$')
-    return axes
-
-#
-def plot_latents(x, f, axes=None):
-    n, nu, d = f.shape
-    if axes is None:
-        _, axes = plt.subplots(nrows=nu, ncols=d, figsize=(8, 6), sharex=True,
-                            sharey=True, constrained_layout=True)
-    for i in range(nu):
-        for j in range(d):
-            axes[i, j].plot(x, f[:, i, j])
-    for ax in axes[-1, :]:
-        ax.set_xlabel(r'$x$')
-    return axes
-
-#
 
 #### UTILITY
 
@@ -106,11 +53,14 @@ def test_gwp(seed=42, show_latents=False):
     key = jrnd.PRNGKey(seed)
     key, key_F, key_Y = jrnd.split(key, 3)
 
-    cov_fn = DefaultingKernel(jk.RBF(), dict(variance=1.0)) * DefaultingKernel(jk.Periodic(), dict(variance=1.0))
+    # cov_fn = DefaultingKernel(jk.RBF(), dict(variance=1.0)) * DefaultingKernel(jk.Periodic(), dict(variance=1.0))
 
-    params_rbf = dict(lengthscale=2.0)  # ls: how much fluctation between periods
-    params_periodic = dict(period=0.3, lengthscale=0.5)  # ls: how much fluctuation within one period
-    cov_params = [params_rbf, params_periodic]
+    # params_rbf = dict(lengthscale=2.0)  # ls: how much fluctation between periods
+    # params_periodic = dict(period=0.3, lengthscale=0.5)  # ls: how much fluctuation within one period
+    # cov_params = [params_rbf, params_periodic]
+
+    cov_fn = DefaultingKernel(jk.RBF(), dict(variance=1.0))
+    cov_params = dict(lengthscale=0.2)
 
     n = 100
     d = 3
@@ -124,8 +74,10 @@ def test_gwp(seed=42, show_latents=False):
     Sigma_gt = construct_wishart(F_gt, L_gt)
 
     plt.figure()
-    plot_wishart(x, Sigma_gt, add_title=True);
-    plt.suptitle('Ground truth Wishart process (RBF $\times$ Periodic)')
+    axes = plot_wishart(x, Sigma_gt, add_title=True);
+    for ax in axes.flatten():
+        ax.set_xlim([0.0, 1.0])
+    plt.suptitle(r'Ground truth Wishart process (RBF $\times$ Periodic)')
 
     print('Create observations')
     wishart_likelihood = Wishart(nu=nu, d=d)
@@ -137,23 +89,30 @@ def test_gwp(seed=42, show_latents=False):
     plt.plot(x, Y)
     plt.xlabel(r'$x$')
     plt.ylabel(r'$Y$')
-    plt.xlim([x[0], x[-1]])
+    plt.xlim([0.0, 1.0])
     plt.title(r'Observations $Y$');
 
     print('Set up models')
     m = int(d*(d+1)/2)
 
-    priors = dict(kernel=[dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
+    # priors = dict(kernel=[dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
+    #                                                                 scale=1.),
+    #                                                         tfb.Exp())),
+    #                     dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
+    #                                                                 scale=1.),
+    #                                                         tfb.Exp()),
+    #                         period=dx.Uniform(0.0, 1.0))],
+    #                 likelihood=dict(L_vec=dx.Normal(loc=jnp.zeros((m, )),
+    #                                                 scale=jnp.ones((m, )))))
+
+    # cov_fn = jk.RBF() * jk.Periodic()
+    priors = dict(kernel=dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
                                                                     scale=1.),
                                                             tfb.Exp())),
-                        dict(lengthscale=dx.Transformed(dx.Normal(loc=0.,
-                                                                    scale=1.),
-                                                            tfb.Exp()),
-                            period=dx.Uniform(0.0, 1.0))],
                     likelihood=dict(L_vec=dx.Normal(loc=jnp.zeros((m, )),
                                                     scale=jnp.ones((m, )))))
 
-    cov_fn = jk.RBF() * jk.Periodic()
+    cov_fn = jk.RBF()
     wp = FullLatentWishartModel(x, Y, cov_fn=cov_fn, priors=priors)
 
     print('Do inference with SMC')
@@ -178,6 +137,9 @@ def test_gwp(seed=42, show_latents=False):
 
     # superposition the sampled distribution on the same axes
     plot_wishart_dist(x, Sigma_samples, axes=axes);
+    for ax in axes.flatten():
+        ax.set_xlim([x[0], x[-1]])
+
     plt.suptitle(r'Estimation of $\Sigma(t)$')
 
     print('Extrapolate ')

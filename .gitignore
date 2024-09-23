@@ -79,7 +79,10 @@ venv.bak/
 
 # others
 data
-results*
 environment.yml.bak
 *.pkl
 .DS_Store
+environment.yml.bak
+remote_test.py
+
+results*

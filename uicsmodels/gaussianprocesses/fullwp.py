@@ -1,26 +1,46 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from uicsmodels.bayesianmodels import GibbsState, ArrayTree
 from uicsmodels.gaussianprocesses.gputil import sample_prior
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel
-from uicsmodels.gaussianprocesses.likelihoods import Wishart, construct_wishart_Lvec
+from uicsmodels.gaussianprocesses.likelihoods import Wishart, WishartRepeatedObs
+from uicsmodels.gaussianprocesses.meanfunctions import Zero
 from uicsmodels.gaussianprocesses.kernels import DefaultingKernel
+from uicsmodels.gaussianprocesses.wputil import construct_wishart_Lvec
 
+import jax
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
+# from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 from jax.tree_util import tree_flatten, tree_unflatten
-
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 
 from copy import deepcopy
-import jax
+
 import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
+
+
+__all__ = ['FullLatentWishartModel', 'FullLatentWishartModelRepeatedObs']
+
 
 def cov_default_recursive(cov_fn, defaults = None):
     if hasattr(cov_fn, 'kernel_set'):
@@ -39,7 +59,7 @@ def cov_default_recursive(cov_fn, defaults = None):
 
 class FullLatentWishartModel(FullLatentGPModel):
 
-    """The latent Wishart process model.
+    r"""The latent Wishart process model.
 
     The generative model is given by:
 
@@ -66,6 +86,8 @@ class FullLatentWishartModel(FullLatentGPModel):
                  cov_fn: Callable,
                  mean_fn: Optional[Callable] = None,
                  priors: Dict = None):
+        if jnp.ndim(X) == 1:
+            X = X[:, jnp.newaxis]
         self.D = Y.shape[1]
         self.nu = self.D + 1
         self.output_shape = (self.nu, self.D) # nu x d; note that JAX must know the number of elements in this tuple
@@ -107,7 +129,7 @@ class FullLatentWishartModel(FullLatentGPModel):
         samples = list()
         for prior in priors_flat:
             key, subkey = jrnd.split(key)
-            samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
+            samples.append(jnp.squeeze(prior.sample(seed=subkey, sample_shape=(num_particles,))))
 
         initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples)
 
@@ -154,6 +176,71 @@ class FullLatentWishartModel(FullLatentGPModel):
         Sigma_pred = jax.vmap(construct_wishart_Lvec, in_axes=(0, 0))(f_pred,
                                                                       samples['likelihood']['L_vec'])
         return Sigma_pred
+
+    #
+#
+class FullLatentWishartModelRepeatedObs(FullLatentWishartModel):
+    """An implementation of the full latent GP model that supports repeated
+    observations at a single input location. This class mostly inherits the
+    FullLatentWishartModel (and transitively the FullLatentGPModel), but 
+    identifies unique input locations and ensures these are duplicated at 
+    likelihood evaluations.
+
+    """
+
+    def __init__(self, X, Y,
+                 cov_fn: Callable,
+                 mean_fn: Optional[Callable] = None,
+                 priors: Dict = None):
+        """Initialize the FullLatentGPModelRepeatedObs model.
+
+        This is partially a repetition of the FullLatentGP init function, but
+        with some crucial differences; we store only the unique inputs, and the
+        reverse indices to later repeat f back to the appropriate instances when
+        we evaluate the likelihood.
+
+        """
+        if jnp.ndim(X) > 1:
+            raise ValueError(f'Repeated input models are only implemented for 1D input, ',
+                             f'but X is of shape {X.shape}')
+
+        self.D = Y.shape[1]
+        self.nu = self.D + 1
+        self.output_shape = (self.nu, self.D) # nu x d; note that JAX must know the number of elements in this tuple
+        X = jnp.squeeze(X)
+        
+        # sort observations
+        sort_idx = jnp.argsort(X, axis=0)
+        X = X[sort_idx]
+        Y = Y[sort_idx, :]
+
+        # get unique values and reverse indices
+        self.X, self.ix, self.rev_ix = jnp.unique(X,
+                                                  return_index=True,
+                                                  return_inverse=True)
+        self.X = self.X[:, jnp.newaxis]
+        self.y = Y
+        self.likelihood = WishartRepeatedObs(nu=self.nu, 
+                                             d=self.D, 
+                                             rev_ix=self.rev_ix) 
+                                          
+        self.param_priors = priors
+        if mean_fn is None:
+            mean_fn = Zero()
+        self.mean_fn = mean_fn
+        self.cov_fn = cov_default_recursive(cov_fn)
+
+    #
+    def forward(self, key, params, f):
+        """Sample from the likelihood, given likelihood parameters and latent f.
+
+        As we are now in 'prediction mode', we do not want to compute reverse
+        indices for f.
+
+        """
+        return self.likelihood.likelihood(params,
+                                          f,
+                                          do_reverse=False).sample(seed=key)
 
     #
 #

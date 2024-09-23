@@ -1,12 +1,26 @@
+# Copyright 2023- The Uncertainty in Complex Systems contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from uicsmodels.bayesianmodels import BayesianModel, GibbsState, ArrayTree
 from uicsmodels.sampling.inference import update_correlated_gaussian, update_metropolis
 from uicsmodels.gaussianprocesses.gputil import sample_prior, sample_predictive, update_gaussian_process, update_gaussian_process_cov_params, update_gaussian_process_mean_params, update_gaussian_process_obs_params
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
-from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian
+from uicsmodels.gaussianprocesses.likelihoods import AbstractLikelihood, Gaussian, RepeatedObsLikelihood
 
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
+# from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 from jax.tree_util import tree_flatten, tree_unflatten
@@ -16,29 +30,36 @@ from distrax._src.bijectors.bijector import Bijector
 
 import jax
 import distrax as dx
+import jaxkern as jk
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
 from blackjax import elliptical_slice, rmh
+
+__all__ = ['FullGPModel', 'FullLatentGPModel', 'FullLatentGPModelRepeatedObs', 'FullMarginalGPModel']
 
 
 jitter = 1e-6
 
 class FullGPModel(BayesianModel):
 
-    def __init__(self, X, y,
-                 cov_fn: Optional[Callable],
+    def __init__(self, X, y: Optional[Array]=None,
+                 cov_fn: Optional[Callable]=None,
                  mean_fn: Callable = None,
-                 priors: Dict = None):
+                 priors: Dict = None,
+                 duplicate_input=False):
         if jnp.ndim(X) == 1:
-            X = X[:, jnp.newaxis]
+            X = X[:, jnp.newaxis]   
+        if cov_fn is None:
+            cov_fn = jk.RBF()     
         # Validate arguments
-        if X.shape[0] != len(y):
+        if y is not None and X.shape[0] > len(y):
             raise ValueError(
                 f'X and y should have the same leading dimension, '
-                f'but X has shape {X.shape} and y has shape {y.shape}')
-        self.X, self.y = X, y
-        self.n = self.X.shape[0]
+                f'but X has shape {X.shape} and y has shape {y.shape}.',
+                f'Use the `FullLatentGPModelRepeatedObs` model for repeated inputs.')
+        self.X, self.y = X, y        
+        self.n = self.X.shape[0]        
         if mean_fn is None:
             mean_fn = Zero()
         self.mean_fn = mean_fn
@@ -54,41 +75,7 @@ class FullGPModel(BayesianModel):
         raise NotImplementedError
 
     #
-    def init_fn(self, key: Array, num_particles: int = 1):
-        """Initial state for MCMC/SMC.
-
-        This function initializes all highest level latent variables. Children
-        of this class need to implement initialization of intermediate latent
-        variables according to the structure of the hierarchical model.
-
-        Args:
-            key: PRNGKey
-            num_particles: int
-                Number of particles to initialize a state for
-        Returns:
-            GibbsState
-
-        """
-
-        priors_flat, priors_treedef = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
-        samples = list()
-        for prior in priors_flat:
-            key, subkey = jrnd.split(key)
-            samples.append(prior.sample(seed=subkey, sample_shape=(num_particles,)))
-
-        initial_position = jax.tree_util.tree_unflatten(priors_treedef, samples)
-        return GibbsState(position=initial_position)
-
-    #
-    def gibbs_fn(self, key: PRNGKey, state: GibbsState, **kwars):
-        raise NotImplementedError
-    
-    #
     def loglikelihood_fn(self) -> Callable:
-        raise NotImplementedError
-    
-    #
-    def logprior_fn(self) -> Callable:
         raise NotImplementedError
     
     #
@@ -96,12 +83,20 @@ class FullGPModel(BayesianModel):
         raise NotImplementedError
 
     #
+    def inference(self, key: PRNGKey, mode='gibbs-in-smc', sampling_parameters: Dict = None):
+        if not hasattr(self, 'y'):
+            raise ValueError(f'Cannot perform inference on a GP model without',
+                             f'providing observed responses y.')
+        return super().inference(key, mode, sampling_parameters)
+
+    #
     
 #
-        
+
+       
 class FullLatentGPModel(FullGPModel):
 
-    """The latent Gaussian process model.
+    r"""The latent Gaussian process model.
 
     The latent Gaussian process model consists of observations (y), generated by
     an observation model that takes the latent Gaussian process (f) and optional
@@ -124,15 +119,16 @@ class FullLatentGPModel(FullGPModel):
 
     """
 
-    def __init__(self, X, y,
-                 cov_fn: Callable,
+    def __init__(self, X, y: Optional[Array] = None,
+                 cov_fn: Optional[Callable] = None,
                  mean_fn: Optional[Callable] = None,
                  priors: Dict = None,
-                 likelihood: AbstractLikelihood = None):
+                 likelihood: AbstractLikelihood = None,
+                 **kwargs):
         if likelihood is None:
             likelihood = Gaussian()
         self.likelihood = likelihood
-        super().__init__(X, y, cov_fn, mean_fn, priors)      
+        super().__init__(X, y, cov_fn, mean_fn, priors, **kwargs)      
 
     #
     def init_fn(self, key, num_particles=1):
@@ -191,7 +187,7 @@ class FullLatentGPModel(FullGPModel):
         #
 
     def gibbs_fn(self, key: PRNGKey, state: GibbsState, temperature: Float= 1.0, **mcmc_parameters):
-        """The Gibbs MCMC kernel.
+        r"""The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
         the latent GP model, the latent GP (f) is first updated, then the
@@ -294,7 +290,7 @@ class FullLatentGPModel(FullGPModel):
 
         def loglikelihood_fn_(state: GibbsState) -> Float:
             position = getattr(state, 'position', state)
-            phi = state.get('likelihood', {})
+            phi = position.get('likelihood', {})
             f = position['f']
             log_pdf = jnp.sum(self.likelihood.log_prob(params=phi, f=f, y=self.y))
             return log_pdf
@@ -317,7 +313,7 @@ class FullLatentGPModel(FullGPModel):
 
         def logprior_fn_(state: GibbsState) -> Float:
             # to work in both Blackjax' MCMC and SMC environments
-            position = getattr(state, 'position', state)  
+            position = getattr(state, 'position', state) 
             logprob = 0
             for component, params in self.param_priors.items():
                 for param, dist in params.items():
@@ -344,7 +340,7 @@ class FullLatentGPModel(FullGPModel):
 
     #
     def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
-        """Samples from the posterior predictive of the latent f
+        r"""Samples from the posterior predictive of the latent f
 
         Args:
             key: PRNGKey
@@ -395,8 +391,15 @@ class FullLatentGPModel(FullGPModel):
         return target_pred
 
     #
+    def forward(self, key, params, f):
+        """Sample from the likelihood, given likelihood parameters and latent f.
+
+        """
+        return self.likelihood.likelihood(params, f).sample(seed=key)
+
+    #
     def predict_y(self, key: PRNGKey, x_pred: Array):
-        """Samples from the posterior predictive distribution
+        r"""Samples from the posterior predictive distribution
 
         Args:
             key: PRNGKey
@@ -415,18 +418,14 @@ class FullLatentGPModel(FullGPModel):
         if samples is None:
             raise AssertionError(
                 f'The posterior predictive distribution can only be called after training.')
-
-        def forward(key, params, f):
-            return self.likelihood.likelihood(params, f).sample(seed=key)
-
-        #
+        
         key, key_f, key_y = jrnd.split(key, 3)
         f_pred = self.predict_f(key_f, x_pred)        
         num_particles = samples['f'].shape[0]
         keys_y = jrnd.split(key_y, num_particles)
         likelihood_params = samples.get('likelihood', {}) #{param: samples[param] for param in self.param_priors['likelihood']}
         obs_param_in_axes = jax.tree_map(lambda l: 0, likelihood_params)
-        y_pred = jax.vmap(jax.jit(forward), 
+        y_pred = jax.vmap(jax.jit(self.forward), 
                           in_axes=(0, 
                                    obs_param_in_axes, 
                                    0))(keys_y, 
@@ -437,8 +436,70 @@ class FullLatentGPModel(FullGPModel):
     #
 #
 
+class FullLatentGPModelRepeatedObs(FullLatentGPModel):
+    """An implementation of the full latent GP model that supports repeated 
+    observations at a single input location. This class mostly inherits the 
+    FullLatentGPModel, but identifies unique input locations and ensures these 
+    are duplicated at likelihood evaluations.
+
+    """
+
+    def __init__(self, X, y, 
+                 cov_fn: Callable,
+                 mean_fn: Optional[Callable] = None,
+                 priors: Dict = None,
+                 likelihood: AbstractLikelihood = None):  
+        """Initialize the FullLatentGPModelRepeatedObs model.
+        
+        This is partially a repetition of the FullLatentGP init function, but 
+        with some crucial differences; we store only the unique inputs, and the
+        reverse indices to later repeat f back to the appropriate instances when
+        we evaluate the likelihood.
+
+        """
+        if jnp.ndim(X) > 1:
+            raise NotImplementedError(f'Repeated input models are only implemented for 1D input, ',
+                                      f'but X is of shape {X.shape}')
+        X = jnp.squeeze(X)
+        # sort observations
+        sort_idx = jnp.argsort(X, axis=0)
+        X = X[sort_idx]
+        y = y[sort_idx]
+
+        # get unique values and reverse indices
+        self.X, self.ix, self.rev_ix = jnp.unique(X, 
+                                                  return_index=True, 
+                                                  return_inverse=True)
+        self.X = self.X[:, jnp.newaxis] 
+        self.y = y
+
+        if likelihood is None:
+            likelihood = Gaussian()
+        self.likelihood = RepeatedObsLikelihood(base_likelihood=likelihood,
+                                                inv_i=self.rev_ix)  # not unique
+        self.param_priors = priors
+        if mean_fn is None:
+            mean_fn = Zero()
+        self.mean_fn = mean_fn
+        self.cov_fn = cov_fn               
+
+    #
+    def forward(self, key, params, f):
+        """Sample from the likelihood, given likelihood parameters and latent f.
+
+        As we are now in 'prediction mode', we do not want to compute reverse
+        indices for f.
+
+        """
+        return self.likelihood.likelihood(params, 
+                                          f, 
+                                          do_reverse=False).sample(seed=key)
+
+    #
+#
+
 class FullMarginalGPModel(FullGPModel):
-    """The marginal Gaussian process model.
+    r"""The marginal Gaussian process model.
 
     In case the likelihood of the GP is Gaussian, we marginalize out the latent
     GP f for (much) more efficient inference.
@@ -460,43 +521,16 @@ class FullMarginalGPModel(FullGPModel):
 
     """
 
-    def __init__(self, X, y,
-                 cov_fn: Optional[Callable],
+    def __init__(self, X, y: Optional[Array] = None,
+                 cov_fn: Optional[Callable] = None,
                  mean_fn: Callable = None,
-                 priors: Dict = None):
-        super().__init__(X, y, cov_fn, mean_fn, priors)
+                 priors: Dict = None,
+                 **kwargs):
         self.likelihood = Gaussian()
+        super().__init__(X, y, cov_fn, mean_fn, priors, **kwargs)        
 
     #
-    def gibbs_fn(self, key, state, temperature=1.0, **mcmc_parameters):
-        """The Gibbs MCMC kernel.
-
-        The Gibbs kernel step function takes a state and returns a new state. In
-        the latent GP model, the latent GP (f) is first updated, then the
-        parameters of the mean (psi) and covariance function (theta), and lastly
-        the parameters of the observation model (phi).
-
-        Args:
-            key:
-                The jax.random.PRNGKey
-            state: GibbsState
-                The current state in the MCMC sampler
-        Returns:
-            GibbsState
-
-        """
-
-        position = state.position.copy()
-
-        loglikelihood_fn_ = self.loglikelihood_fn()
-        logprior_fn_ = self.logprior_fn()
-
-        logdensity = lambda state: temperature * loglikelihood_fn_(state) + logprior_fn_(state)
-        new_position, info_ = update_metropolis(key, logdensity, position, stepsize=mcmc_parameters.get('stepsize', 0.01))
-
-        return GibbsState(position=new_position), None  # We return None to satisfy SMC; this needs to be filled with acceptance information
-
-    #
+    
     def loglikelihood_fn(self) -> Callable:
         """Returns the log-likelihood function for the model given a state.
 
@@ -512,13 +546,13 @@ class FullMarginalGPModel(FullGPModel):
         def loglikelihood_fn_(state: GibbsState) -> Float:
             position = getattr(state, 'position', state)
             psi = {param: position[param] for param in self.param_priors['mean']} if 'mean' in self.param_priors else {}
-            psi = state.get('mean', {})
-            theta = state['kernel']
-            sigma = state['likelihood']['obs_noise']
+            psi = position.get('mean', {})
+            theta = position['kernel']
+            sigma = position['likelihood']['obs_noise']
             mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
             cov = self.cov_fn.cross_covariance(params=theta,
                                                x=self.X,
-                                               y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.n)
+                                               y=self.X) + (sigma ** 2 + jitter) * jnp.eye(self.X.shape[0])
             logprob = dx.MultivariateNormalFullCovariance(mean, cov).log_prob(self.y)
             return logprob
 
@@ -526,31 +560,8 @@ class FullMarginalGPModel(FullGPModel):
         return loglikelihood_fn_
 
     #
-    def logprior_fn(self) -> Callable:
-        """Returns the log-prior function for the model given a state.
-
-        Args:
-            None
-        Returns:
-            A function that computes the log-prior of the model given a state.
-
-        """
-
-        def logprior_fn_(state: GibbsState):
-            position = getattr(state, 'position', state)
-            logprob = 0
-            priors_flat, _ = tree_flatten(self.param_priors, lambda l: isinstance(l, (Distribution, Bijector)))
-            values_flat, _ = tree_flatten(position)
-            for value, dist in zip(values_flat, priors_flat):
-                logprob += jnp.sum(dist.log_prob(value))
-            return logprob
-
-        #
-        return logprior_fn_
-
-    #
     def predict_f(self, key: Array, x_pred: ArrayTree, num_subsample=-1):
-        """Predict the latent f on unseen pointsand
+        r"""Predict the latent f on unseen points and
 
         This function takes the approximated posterior (either by MCMC or SMC)
         and predicts new latent function evaluations f^*.
@@ -605,7 +616,7 @@ class FullMarginalGPModel(FullGPModel):
 
     #
     def predict_y(self, key: PRNGKey, x_pred: Array):
-        """Samples from the posterior predictive distribution
+        r"""Samples from the posterior predictive distribution
 
         Args:
             key: PRNGKey
