@@ -33,7 +33,8 @@ def naive_monte_carlo(key,
                       model: BayesianModel, 
                       num_prior_draws: int = 1_000, 
                       num_chunks: int = 5,
-                      iid_obs: bool = True) -> Float:   
+                      iid_obs: bool = True,
+                      pb = True) -> Float:   
     r"""The Naive Monte Carlo (NMC) estimator
 
     The marginal likelihood is defined by 
@@ -59,7 +60,7 @@ def naive_monte_carlo(key,
     
     # We don't want to vmap this loop, as the reason for the loop is to avoid
     # running out of memory!
-    for i in tqdm(range(num_chunks)):
+    for i in tqdm(range(num_chunks), disable=not pb):
         key, subkey = jrnd.split(key)
         prior_draws = model.sample_from_prior(subkey, 
                                               num_samples=num_prior_draws)
@@ -68,10 +69,10 @@ def naive_monte_carlo(key,
 
 #
 def harmonic_mean(key, model: BayesianModel) -> Float:
-    pass
+    raise NotImplementedError
 
 def generalized_harmonic_mean(key, model: BayesianModel) -> Float:
-    pass
+    raise NotImplementedError
 
 #
 def importance_sampling(key, 
