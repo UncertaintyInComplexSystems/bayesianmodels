@@ -247,13 +247,9 @@ class BayesianModel(ABC):
 
             if include_trace:
                 return particles, num_iter, marginal_likelihood, trace, temperature
-            return particles, num_iter, marginal_likelihood
+            return initial_particles, particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
+        
         elif mode == 'gibbs' or mode == 'mcmc':
-            # NOTE: Feedback: use consistent naming and print warning
-            #   - Warn when defaults are used due to missing parameters
-            #   - SMC uses 'num_mcmc_steps', which I like better
-            # NOTE: Feedback: `num_burn` and `num_samples` are only added,
-            #   thus one of them is superflous
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
             num_thin = sampling_parameters.get('num_thin', 1)
