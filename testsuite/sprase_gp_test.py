@@ -937,6 +937,7 @@ def main(args):
 
     # parameters 
     num_runs = int(config['DEFAULT']['num_runs'])
+    num_datapoints = int(config['DEFAULT']['num_datapoints'])
     data_type = config['DEFAULT']['data']
     # note = config['DEFAULT']['note']
     note = config['DEFAULT'].get('Note', '')
@@ -973,11 +974,11 @@ def main(args):
                 scale=float(config['data.gp']['scale']),
                 obs_noise=float(config['data.gp']['obs_noise']),
                 seed=seed,
-                n=100)
+                n=num_datapoints)
         if data_type == 'square':
-            return generate_square_data(path_plot=path)
+            return generate_square_data(path_plot=path, n=num_datapoints)
         if data_type == 'chirp':
-            return generate_chirp_data(f0=1, f1=6, path_plot=path)
+            return generate_chirp_data(f0=1, f1=6, path_plot=path, n=num_datapoints)
 
 
     # data = gen_data(path=path)
@@ -1045,17 +1046,17 @@ def main(args):
     #     root_path=path)
 
     # run marginal gp
-    run_model(
-        seeds=random_random_seeds,
-        id='marginalGP',
-        num_runs = num_runs,
-        inference_fn=marginal_gp_inference,
-        root_path=path)
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='marginalGP',
+    #     num_runs = num_runs,
+    #     inference_fn=marginal_gp_inference,
+    #     root_path=path)
 
-    # run latent gp
-    run_model(
-        seeds=random_random_seeds,
-        id='latentGP',
-        num_runs = num_runs,
-        inference_fn=latent_gp_inference,
-        root_path=path)
+    # # run latent gp
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='latentGP',
+    #     num_runs = num_runs,
+    #     inference_fn=latent_gp_inference,
+    #     root_path=path)

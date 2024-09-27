@@ -480,6 +480,7 @@ class SparseGPModel(FullGPModel):
         def logprior_fn_(state: GibbsState) -> Float:
             jax.debug.print('Using logprior_fn!!!')
             position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
+            
             logprob = 0
             for component, params in self.param_priors.items():
                 # mean, kernel, likelihood
