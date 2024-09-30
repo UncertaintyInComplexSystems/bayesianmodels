@@ -95,30 +95,7 @@ class SparseGPModel(FullGPModel):
             """
             Sample Z and u
             """
-            _, *sub_key = jrnd.split(key, num=3)
-            key_sample_u = sub_key[0]
-            key_sample_z = sub_key[1]
 
-            # sample M inducing inputs Z
-            # samples_Z = dx.Normal(   
-            #     loc=Z_params['mean'],
-            #     scale=Z_params['scale']).sample(seed=key_sample_z)
-
-            # sort inducing inputs Z
-            # sorted_inducing_indices = jnp.argsort(samples_Z, axis=0)
-            # samples_Z = jnp.take_along_axis(
-            #     samples_Z, sorted_inducing_indices, axis=0)
-
-            # true evenly-spaced Z in x domain allows drawing true u samples
-            # lin_Z = jnp.linspace(
-            #     jnp.min(self.X), 
-            #     jnp.max(self.X), 
-            #     self.m)
-            # # find and select closest values in X-domain
-            # samples_Z_idx = jnp.searchsorted(
-            #    self.X.flatten(), lin_Z)
-            # samples_Z = self.X.flatten()[samples_Z_idx]
-            # samples_Z = lin_Z
             samples_Z = Z_params['Z']
 
             # Sample inducing variables u
@@ -130,11 +107,7 @@ class SparseGPModel(FullGPModel):
 
             samples_u = jnp.asarray(mean_u + jnp.dot(
                 jnp.linalg.cholesky(cov_ZZ),
-                jrnd.normal(key_sample_u, shape=[samples_Z.shape[0]])))
-
-            # True u samples based on true Z's
-            # samples_u = self.f_true[samples_Z_idx]
-            
+                jrnd.normal(key, shape=[samples_Z.shape[0]])))
             
             return samples_u
 
@@ -142,7 +115,6 @@ class SparseGPModel(FullGPModel):
         initial_position = initial_state.position
 
         cov_params = initial_position.get('kernel', {})
-        # Z_params = initial_position.get('inducing_inputs_Z', {})
         Z_params = initial_position.get('inducing_points', {})
 
         if num_particles > 1:
@@ -169,10 +141,7 @@ class SparseGPModel(FullGPModel):
 
         return GibbsState(initial_position)
 
-        #
 
-    
-    # log-density that is used in very Gibbs update step
     def _loglikelihood_fn_fitc(self, u, Z, theta, sigma):
         """
         log-density log p(y | u, Z, theta), used in very Gibbs update step
@@ -187,7 +156,6 @@ class SparseGPModel(FullGPModel):
         Returns:
             (_type_): sum of log p(y | u, Z, theta) 
         """
-        # QUESTION add jitter to covariances?
         
         # compute needed covariance matricies 
         cov_ZZ = self.cov_fn.cross_covariance(
@@ -294,10 +262,6 @@ class SparseGPModel(FullGPModel):
             def logdensity_fn_Z(z):
                 log_pdf = 0
         
-                # P(Z) # TODO Change to use self.param_priors
-                # log_pdf += jnp.sum(dx.Normal( 
-                #     loc=Z_params['mean'],
-                #     scale=Z_params['scale']).log_prob(z))
                 log_pdf += jnp.sum(
                     self.param_priors['inducing_points']['Z'].log_prob(inducing_points['Z']))
 
