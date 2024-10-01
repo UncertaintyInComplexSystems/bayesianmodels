@@ -523,7 +523,7 @@ def latent_gp_inference(
 
     logging.info('generate predictive')
     key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=750)
+    x_pred = jnp.linspace(-1, 1, num=x.shape[0])
     y_pred = model.predict_f(key_pred, x_pred)
 
     # plot results
@@ -619,7 +619,7 @@ def marginal_gp_inference(
 
     logging.info('generate predictive')
     key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=250)
+    x_pred = jnp.linspace(-1, 1, num=x.shape[0])
     y_pred = model.predict_f(key_pred, x_pred)
 
     # plot results
@@ -711,8 +711,7 @@ def sparse_gp_inference(
         x, y, 
         cov_fn=jk.RBF(), 
         priors=priors, 
-        num_inducing_points=model_parameter['num_inducing_points'],
-        f_true=ground_truth.get('f'))  
+        num_inducing_points=model_parameter['num_inducing_points'])  
 
     # inference
     logging.info('run inference')
@@ -737,7 +736,7 @@ def sparse_gp_inference(
 
     logging.info('generate predictive')
     key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=750)
+    x_pred = jnp.linspace(-1, 1, num=x.shape[0])
     y_pred = gp_sparse.predict_f(key_pred, x_pred)
 
     # plot results
@@ -804,7 +803,6 @@ def sparse_gp_inference_hemMCMC(
     Using stochastic gradient Hamiltonian Monte Carlo
     """
 
-
     key = jrnd.PRNGKey(seed)
     x = data['x']
     y = data['y']
@@ -840,8 +838,7 @@ def sparse_gp_inference_hemMCMC(
         x, y, 
         cov_fn=jk.RBF(), 
         priors=priors, 
-        num_inducing_points=model_parameter['num_inducing_points'],
-        f_true=ground_truth.get('f'))  
+        num_inducing_points=model_parameter['num_inducing_points'])  
 
     # NUTS sampler parameter
     from blackjax import nuts
@@ -874,7 +871,7 @@ def sparse_gp_inference_hemMCMC(
 
     logging.info('generate predictive')
     key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=100)
+    x_pred = jnp.linspace(-1, 1, num=x.shape[0])
     y_pred = gp_sparse.predict_f(key_pred, x_pred)
 
     # plot results
@@ -944,7 +941,6 @@ def main(args):
 
     # Everything in the config file is encoded as a string.
     # Thus any numerical parameters need to be translated into their correct data type. 
-    # TODO: Do automatically by iterating over dict that defines keys to be converted to int values.
     model_parameter = dict( 
         num_inducing_points = int(
             config['model_parameter']['num_inducing_points']))
@@ -979,9 +975,6 @@ def main(args):
             return generate_square_data(path_plot=path, n=num_datapoints)
         if data_type == 'chirp':
             return generate_chirp_data(f0=1, f1=6, path_plot=path, n=num_datapoints)
-
-
-    # data = gen_data(path=path)
     
     # generate random seeds for inference
     random_random_seeds = jrnd.randint(
@@ -1017,15 +1010,15 @@ def main(args):
                 data=data,
                 path=paths[i])
 
-        ## summary stats
-        # summary_stats = summary_stats_from_log(root_path + id + '.log')
-        # logging.info(f'summary_stats: {summary_stats}')
+        # summary stats
+        summary_stats = summary_stats_from_log(root_path + id + '.log')
+        logging.info(f'summary_stats: {summary_stats}')
 
-        # print(f'\n{id} | summary stats')
-        # for var in summary_stats:
-        #     print(f' {var}')
-        #     for stat in summary_stats[var]:
-        #         print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
+        print(f'\n{id} | summary stats')
+        for var in summary_stats:
+            print(f' {var}')
+            for stat in summary_stats[var]:
+                print(f'    {stat}: {summary_stats[var][stat]:0.3f}')
         print()
 
 
