@@ -17,7 +17,6 @@ import distrax as dx
 import jax.numpy as jnp
 from jax.random import PRNGKey
 import jax.random as jrnd
-from blackjax import elliptical_slice, rmh
 from jax.debug import print
 
 from tensorflow_probability.substrates import jax as tfp
@@ -49,18 +48,18 @@ class SparseGPModel(FullGPModel):
 
     """ 
 
-    def __init__(self, X, y,
-                 cov_fn: Optional[Callable],
-                 mean_fn: Callable = None,
-                 priors: Dict = None,
-                 likelihood: AbstractLikelihood = None,
-                 num_inducing_points: int = None):
-        
-        if likelihood is None:
-            likelihood = Gaussian()
+    def __init__(
+            self, X, y,
+            priors: Dict,
+            cov_fn: Optional[Callable],
+            mean_fn: Callable = None,
+            likelihood: AbstractLikelihood = None):
 
-        # self.likelihood = likelihood  # NOTE: I am actually not using it. Should I? 
-        self.m = num_inducing_points  # TODO: Instead of passing, infer from prior over inducing inputs
+        if likelihood is not None:
+            raise NotImplementedError 
+
+        # infereing number of inducing points from from prior
+        self.m = priors['inducing_points']['Z'].scale.shape[0] 
 
         super().__init__(X, y, cov_fn, mean_fn, priors)
 
@@ -84,7 +83,7 @@ class SparseGPModel(FullGPModel):
             GibbsState
         """
         
-        key, key_super_init = jrnd.split(key)
+        _, key_super_init = jrnd.split(key)
 
         # sample from hyperparameter priors
         initial_state = super().init_fn(key_super_init, num_particles)
@@ -273,20 +272,20 @@ class SparseGPModel(FullGPModel):
             # get updated cov. parameters theta
             cov_params = position_.get('kernel', {})
             likelihood_params = position_.get('likelihood', {})
+            Z = position['inducing_points']['Z']
 
             # u is a GP in itself.
             # Define u's mean and covariance function
-            mean_u = self.mean_fn.mean(params=None, x=position_['inducing_points']['Z'])
+            mean_u = self.mean_fn.mean(params=None, x=Z)
             cov_u = self.cov_fn.cross_covariance(
                 params=cov_params,
-                x=position_['inducing_points']['Z'],
-                y=position_['inducing_points']['Z'])
+                x=Z, y=Z)
             cov_u += JITTER * jnp.eye(*cov_u.shape)
 
             def logdensity_fn_u(u_): 
                 return temperature*self._loglikelihood_fn_fitc(
                     u=u_,
-                    Z=position_['inducing_points']['Z'], 
+                    Z=Z, 
                     theta=cov_params, 
                     sigma=likelihood_params['obs_noise'])
 
@@ -414,7 +413,7 @@ class SparseGPModel(FullGPModel):
             A function that computes the log-likelihood of the model given a
             state.
         """
-        def loglikelihood_fn_(state: GibbsState) -> Float:
+        def loglikelihood_fn_(state: GibbsState, batch) -> Float:
             # position = state.position
             # jax.debug.print('Using loglikelihood_fn!!!')
             position = getattr(state, 'position', state)
@@ -430,10 +429,6 @@ class SparseGPModel(FullGPModel):
         return loglikelihood_fn_
 
 
-    # TODO somethingn needs to change here, its using f.
-    # TODO: Is this ever called? 
-    #       -> its references in SMC
-    #       -> but I never see the debug print I put below. 
     def logprior_fn(self) -> Callable:
         """Returns the log-prior function for the model given a state.
 
@@ -445,25 +440,28 @@ class SparseGPModel(FullGPModel):
         """
 
         def logprior_fn_(state: GibbsState) -> Float:
-            jax.debug.print('Using logprior_fn!!!')
+
             position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
-            
+    
             logprob = 0
             for component, params in self.param_priors.items():
-                # mean, kernel, likelihood
                 for param, dist in params.items():
                     # parameters per component
-                    logprob += jnp.sum(dist.log_prob(position[param]))
+                    logprob += jnp.sum(dist.log_prob(position[component][param]))
 
-            # plus the logprob of the latent f itself
-            psi = {param: position[param] for param in self.param_priors['mean']} if 'mean' in self.param_priors else {}
-            theta = {param: position[param] for param in
-                     self.param_priors['kernel']} if 'kernel' in self.param_priors else {}
-            mean = self.mean_fn.mean(params=psi, x=self.X).flatten()
-            cov = self.cov_fn.cross_covariance(params=theta,
-                                               x=self.X,
-                                               y=self.X) + JITTER * jnp.eye(self.n)
-            logprob += dx.MultivariateNormalFullCovariance(mean, cov).log_prob(position['f'])
+            # plus the logprob of u
+            # NOTE: this implementation is very specific to this model. For a more general approach see the logprior_fn implementation of the latentGP
+            cov_params = position.get('kernel', {})
+            Z = position['inducing_points']['Z']
+
+            mean_u = self.mean_fn.mean(params=None, x=Z)
+            cov_u = self.cov_fn.cross_covariance(
+                params=cov_params,
+                x=Z,
+                y=Z)
+            cov_u += JITTER * jnp.eye(*cov_u.shape)
+            logprob += dx.MultivariateNormalFullCovariance(mean_u, cov_u).log_prob(position['u'])  # TODO: There should probably a sum here.
+
             return logprob
 
         #
@@ -471,22 +469,20 @@ class SparseGPModel(FullGPModel):
 
 
     # TODO rename? 
-    def predict_f(self, key: PRNGKey, x_pred: ArrayTree):
+    def predict_f(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc'):
         """ see Rossi eq. 16
         """
 
         # jax.debug.print('\n\n')
-        # jax.debug.print('predict_f sample keys {d}', d=list(samples.keys()))
-        # for k in samples.keys():
-        #     if isinstance(samples[k], dict):
-        #         jax.debug.print('{k}: {d}', k=k, d=list(samples[k].keys()))
-        #         for kk in samples[k].keys():
-        #             jax.debug.print('    {k}: {d}', k=kk, d=samples[k][kk].shape)
+        # jax.debug.print('predict_f sample keys {d}', d=list(priors.keys()))
+        # for k in priors.keys():
+        #     if isinstance(priors[k], dict):
+        #         jax.debug.print('{k}: {d}', k=k, d=list(priors[k].keys()))
+        #         for kk in priors[k].keys():
+        #             jax.debug.print('    {k}: {d}', k=kk, d=priors[k][kk].shape)
         #     else:
-        #         jax.debug.print('{k}: {d}', k=k, d=samples[k].shape)
+        #         jax.debug.print('{k}: {d}', k=k, d=priors[k].shape)
         # jax.debug.print('\n\n')
-
-
 
         def sample_predictive(
                 key: PRNGKey,
@@ -530,7 +526,6 @@ class SparseGPModel(FullGPModel):
                 cov_XZ, 
                 jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ)))
             alpha = (cov_XX - XZ_ZZ_ZX + diag_noise) * jnp.eye(*cov_XX.shape)  # keeping only the values along the diagonal  # NOTE: Used jnp.eye instead of jnp.diag.
-            # print('alpha any NaNs: {b}', b=jnp.any(jnp.isnan(alpha)))
 
             # compute sigma fitc
             sigma_fitc = cov_ZZ + jnp.dot(
@@ -577,8 +572,8 @@ class SparseGPModel(FullGPModel):
             return pred
 
         # extract parameters and samples from data structure
-        samples = self.get_monte_carlo_samples()
-        
+        samples = self.get_monte_carlo_samples(mode=inference_mode)
+
         cov_params = samples['kernel']
         Z = samples['inducing_points']['Z']
         likelihood = samples['likelihood']

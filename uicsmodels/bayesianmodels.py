@@ -27,8 +27,11 @@ from typing import Any, Union, NamedTuple, Dict, Any, Iterable, Mapping, Callabl
 from jaxtyping import Float
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
+import blackjax
 from blackjax import adaptive_tempered_smc, rmh
 import blackjax.smc.resampling as resampling
+from blackjax import sghmc
+from blackjax.sgmcmc import grad_estimator
 
 from jax.tree_util import tree_flatten, tree_unflatten, tree_map
 from distrax._src.distributions.distribution import Distribution
@@ -249,7 +252,7 @@ class BayesianModel(ABC):
                 return particles, num_iter, marginal_likelihood, trace, temperature
             return initial_particles, particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
         
-        elif mode == 'gibbs' or mode == 'mcmc':
+        elif mode == 'gibbs' or mode == 'mcmc' or mode == 'sghmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
             num_thin = sampling_parameters.get('num_thin', 1)
@@ -266,7 +269,43 @@ class BayesianModel(ABC):
                 logdensity_fn = lambda state: loglikelihood_fn(state) + logprior_fn(state)
                 kernel = kernel_type(logdensity_fn, **kernel_parameters)
                 step_fn = kernel.step
-                initial_state = sampling_parameters.get('initial_state', kernel.init(self.init_fn(key_init).position))
+                initial_state = sampling_parameters.get(
+                    'initial_state', 
+                    kernel.init(self.init_fn(key_init).position))
+
+            elif mode == 'sghmc':
+                """
+                To initialize a SGHMC kernel one needs to specify a schedule function, which returns a step size at each sampling step, and a gradient estimator function. 
+                Here for a constant step size, and `data_size` data samples:
+                """
+                kernel_parameters = sampling_parameters.get('kernel_parameters')
+
+
+                grad_est = grad_estimator(
+                    self.logprior_fn(), 
+                    self.loglikelihood_fn(), 
+                    data_size = 100)  # QUESTION: What to choose here?
+                
+                # kernel = sghmc(
+                kernel = blackjax.sghmc(
+                    grad_estimator = grad_est, 
+                    **kernel_parameters)
+
+                # initial_state = sampling_parameters.get(
+                #     'initial_state', 
+                #     kernel.init(self.init_fn(key_init).position))
+                initial_state = self.init_fn(key_init).position
+
+                # jax.debug.breakpoint()
+
+                # kernel(key_inference, None, self.X, 0.1)  # TEst call
+
+                def step(rng_key, state):
+                    # adapt the sghmc step function 
+                    return kernel(rng_key, state, self.X , 1e-3), None
+
+                step_fn = step
+
 
             states = inference_loop(key_inference,
                                     step_fn,

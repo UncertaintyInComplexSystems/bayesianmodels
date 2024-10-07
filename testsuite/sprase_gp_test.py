@@ -675,7 +675,6 @@ def sparse_gp_inference(
     sampling_parameter:dict,
     data:dict, path:str):
 
-
     key = jrnd.PRNGKey(seed)
     x = data['x']
     y = data['y']
@@ -710,8 +709,7 @@ def sparse_gp_inference(
     gp_sparse = SparseGPModel(
         x, y, 
         cov_fn=jk.RBF(), 
-        priors=priors, 
-        num_inducing_points=model_parameter['num_inducing_points'])  
+        priors=priors)  
 
     # inference
     logging.info('run inference')
@@ -793,7 +791,7 @@ def sparse_gp_inference(
     del gp_sparse
 
 
-def sparse_gp_inference_hemMCMC(
+def sparse_gp_inference_sghmc(
     seed,
     model_parameter:dict, 
     sampling_parameter:dict,
@@ -837,58 +835,69 @@ def sparse_gp_inference_hemMCMC(
     gp_sparse = SparseGPModel(
         x, y, 
         cov_fn=jk.RBF(), 
-        priors=priors, 
-        num_inducing_points=model_parameter['num_inducing_points'])  
+        priors=priors)  
 
-    # NUTS sampler parameter
-    from blackjax import nuts
-    sampling_parameter['kernel'] = nuts
+    # Setup SGHMC
     sampling_parameter['kernel_parameters'] = dict(
-        # logdensity_fn = gp_sparse.loglikelihood_fn, 
-        step_size = 1e-3, 
-        inverse_mass_matrix = None)
+        num_integration_steps = 10)
+        # alpha = 0.01, 
+        # beta = 0)
+    
+    # used for NUTS
+    # sampling_parameter['kernel_parameters'] = dict(
+    #     step_size = 1e-3,
+    #     inverse_mass_matrix = jnp.eye((23))) # TODO: Revist choice of mass-matrix here. Size realtes to number of variables.
 
     # inference
     logging.info('run inference')
     key, key_inference = jrnd.split(key)
     start = timer()
-    initial_particles, particles, _, marginal_likelihood = gp_sparse.inference(
+    output = gp_sparse.inference(
         key_inference, 
-        mode='mcmc', 
+        mode='sghmc', 
         sampling_parameters=sampling_parameter)
+
+    print('inference output?')
+    jax.debug.breakpoint()
+
+    particles, _, marginal_likelihood = gp_sparse.inference(
+        key_inference, 
+        mode='sghmc', 
+        sampling_parameters=sampling_parameter)
+    
     logging.info(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
     logging.info(
         'execution_time_min: ' + f'{(timer() - start)/60}')
-    
+
     # Sort Z and u following Z.
-    sorted_inducing_indices = jnp.argsort(particles.particles['inducing_points']['Z'], axis=1)
-    particles.particles['inducing_points']['Z'] = jnp.take_along_axis(
-        particles.particles['inducing_points']['Z'], sorted_inducing_indices, axis=1)
-    particles.particles['u'] = jnp.take_along_axis(
-        particles.particles['u'], sorted_inducing_indices, axis=1)
+    sorted_inducing_indices = jnp.argsort(particles['inducing_points']['Z'], axis=1)
+    particles['inducing_points']['Z'] = jnp.take_along_axis(
+        particles['inducing_points']['Z'], sorted_inducing_indices, axis=1)
+    particles['u'] = jnp.take_along_axis(
+        particles['u'], sorted_inducing_indices, axis=1)
 
 
     logging.info('generate predictive')
     key, key_pred = jrnd.split(key)
     x_pred = jnp.linspace(-1, 1, num=x.shape[0])
-    y_pred = gp_sparse.predict_f(key_pred, x_pred)
+    y_pred = gp_sparse.predict_f(key_pred, x_pred, inference_mode='mcmc')
 
     # plot results
     logging.info('generate plots')
 
-    logging.info('call plot_smc')
-    sub_title = ''
-    plot_smc(
-        x, y, particles.particles, ground_truth, 
-        title=f'Sparse GP' + sub_title,
-        folder=path)
+    # logging.info('call plot_smc')
+    # sub_title = ''
+    # plot_smc(
+    #     x, y, particles.particles, ground_truth, 
+    #     title=f'Sparse GP' + sub_title,
+    #     folder=path)
     
     logging.info('call plot_predictive')
-    z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
-    u = jnp.mean(particles.particles['u'], axis=0)
+    z = jnp.mean(particles['inducing_points']['Z'], axis=0)
+    u = jnp.mean(particles['u'], axis=0)
     plot_predictive_f(
-        particles = particles.particles,
+        particles = particles,
         points_x=z, points_y=u, 
         points_label='inducing points (mean)', points_color=colors['red'],
         x_true=x, f_true=ground_truth.get('f'),
@@ -897,8 +906,8 @@ def sparse_gp_inference_hemMCMC(
         title='Sparse GP\npredictive',
         folder=path)
 
-    z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
-    u = jnp.mean(particles.particles['u'], axis=0)
+    z = jnp.mean(particles['inducing_points']['Z'], axis=0)
+    u = jnp.mean(particles['u'], axis=0)
     
     # pickle data and infernece output for combining the results later
     logging.info('pickle data and inference output')
@@ -908,7 +917,6 @@ def sparse_gp_inference_hemMCMC(
         x_pred = x_pred,
         y_pred = y_pred,
         ground_truth = ground_truth,
-        initial_particles = initial_particles,
         particles = particles,
         marginal_likelihood = marginal_likelihood)
     
@@ -1022,21 +1030,21 @@ def main(args):
         print()
 
 
-    # sparse gp
-    run_model(
-        seeds=random_random_seeds,
-        id='sparseGP',
-        num_runs = num_runs,
-        inference_fn=sparse_gp_inference,
-        root_path=path)
-    
-    # sparse gp MCMC nuts
+    # sparse gp with MCMC-in-SMC
     # run_model(
     #     seeds=random_random_seeds,
-    #     id='sparseGP_mcmc',
+    #     id='sparseGP',
     #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference_hemMCMC,
+    #     inference_fn=sparse_gp_inference,
     #     root_path=path)
+    
+    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
+    run_model(
+        seeds=random_random_seeds,
+        id='sparseGP_sghmc',
+        num_runs = num_runs,
+        inference_fn=sparse_gp_inference_sghmc,
+        root_path=path)
 
     # run marginal gp
     # run_model(
@@ -1053,3 +1061,31 @@ def main(args):
     #     num_runs = num_runs,
     #     inference_fn=latent_gp_inference,
     #     root_path=path)
+
+import jax
+import jax.numpy as jnp
+import jax.scipy.stats as stats
+import numpy as np
+
+import blackjax
+
+observed = np.random.normal(10, 20, size=1_000)
+def logdensity_fn(x):
+    logpdf = stats.norm.logpdf(observed, x["loc"], x["scale"])
+    return jnp.sum(logpdf)
+
+# Build the kernel
+step_size = 1e-3
+inverse_mass_matrix = jnp.array([1., 1.])
+nuts = blackjax.nuts(logdensity_fn, step_size, inverse_mass_matrix)
+
+# Initialize the state
+initial_position = {"loc": 1., "scale": 2.}
+state = nuts.init(initial_position)
+
+# Iterate
+rng_key = jax.random.key(0)
+step = jax.jit(nuts.step)
+for i in range(100):
+    nuts_key = jax.random.fold_in(rng_key, i)
+    state, _ = step(nuts_key, state)
