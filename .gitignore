@@ -76,6 +76,9 @@ venv.bak/
 .Trashes
 *.swp
 
+# vs-code
+*.code-workspace
+
 # others
 data
 environment.yml.bak
