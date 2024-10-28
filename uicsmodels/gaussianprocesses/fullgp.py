@@ -590,15 +590,17 @@ class FullMarginalGPModel(FullGPModel):
         cov_params = samples['kernel']
         mean_params_in_axes = jax.tree_map(lambda l: 0, mean_params)
         cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
-        sample_fun = lambda key, mean_params_, cov_params_, obs_noise_: sample_predictive(key,
-                                                                            mean_params=mean_params_,
-                                                                            cov_params=cov_params_,
-                                                                            mean_fn=self.mean_fn,
-                                                                            cov_fn=self.cov_fn,
-                                                                            x=self.X,
-                                                                            z=x_pred,
-                                                                            target=self.y,
-                                                                            obs_noise=obs_noise_)
+        sample_fun = lambda key, mean_params_, cov_params_, obs_noise_: sample_predictive(
+            key,
+            mean_params=mean_params_,
+            cov_params=cov_params_,
+            mean_fn=self.mean_fn,
+            cov_fn=self.cov_fn,
+            x=self.X,
+            z=x_pred,
+            target=self.y,
+        obs_noise=obs_noise_)
+
         keys = jrnd.split(key, num_particles)
         target_pred = jax.vmap(jax.jit(sample_fun),
                         in_axes=(0,
