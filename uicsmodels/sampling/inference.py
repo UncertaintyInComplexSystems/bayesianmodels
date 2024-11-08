@@ -239,14 +239,14 @@ def smc_inference_loop(rng_key: PRNGKey,
     
     @jax.jit
     def one_step(carry):                
-        i, state, k, curr_log_likelihood = carry
+        i, state, k, curr_log_likelihood = carry  # TODO: diff to BlackJAX example
         k, subk = jax.random.split(k, 2)
         state, info = smc_kernel(subk, state)        
         return i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment
 
     #
-    n_iter, final_state, _, lml = jax.lax.while_loop(cond, one_step, 
-                                                      (0, initial_state, rng_key, 0))
+    n_iter, final_state, _, lml = jax.lax.while_loop(
+        cond, one_step, (0, initial_state, rng_key, 0))
 
     return n_iter, final_state, lml
 
