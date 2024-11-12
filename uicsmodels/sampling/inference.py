@@ -15,7 +15,9 @@ from numpy import var
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
-from blackjax import elliptical_slice, rmh
+from blackjax import elliptical_slice
+
+
 
 __all__ = ['inference_loop', 
            'smc_inference_loop', 
@@ -338,7 +340,9 @@ def update_metropolis(key,
     for varval in vars_flattened:
         m += varval.shape[0] if varval.shape else 1
 
-    kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+    # kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+    kernel = blackjax.normal_random_walk(logdensity_fn=logdensity, sigma=stepsize * jnp.eye(m))
+
     rmh_state = kernel.init(variables)
     rmh_state, rmh_info = kernel.step(key, rmh_state)
     return rmh_state.position, rmh_info

@@ -27,7 +27,9 @@ from typing import Any, Union, NamedTuple, Dict, Any, Iterable, Mapping, Callabl
 from jaxtyping import Float
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
-from blackjax import adaptive_tempered_smc, rmh
+from blackjax import rmh
+from .blackjaxxx.smc.adaptive_tempered import adaptive_tempered_smc  # from blackjax import adaptive_tempered_smc
+
 import blackjax.smc.resampling as resampling
 
 from jax.tree_util import tree_flatten, tree_unflatten, tree_map

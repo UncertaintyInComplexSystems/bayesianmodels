@@ -185,7 +185,12 @@ class FullLatentGPModel(FullGPModel):
 
         #
 
-    def gibbs_fn(self, key: PRNGKey, state: GibbsState, temperature: Float= 1.0, **mcmc_parameters):
+    def gibbs_fn(self, 
+                 key: PRNGKey, 
+                 state: GibbsState, 
+                 tempered_logposterior_fn,
+                 temperature: Float= 1.0, 
+                 **mcmc_parameters):
         r"""The Gibbs MCMC kernel.
 
         The Gibbs kernel step function takes a state and returns a new state. In
@@ -208,6 +213,7 @@ class FullLatentGPModel(FullGPModel):
 
         """
         position = state.position.copy()
+        # jax.debug.print('fullGP temp {t}',t=temperature)
 
         # Sample the latent GP using:   
         # p(f | theta, psi, y) \propto p(y | f, phi) p(f | psi, theta)
