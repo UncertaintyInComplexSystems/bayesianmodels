@@ -246,6 +246,7 @@ class BayesianModel(ABC):
             if include_trace:
                 return particles, num_iter, marginal_likelihood, trace, temperature
             return particles, num_iter, marginal_likelihood
+        
         elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)

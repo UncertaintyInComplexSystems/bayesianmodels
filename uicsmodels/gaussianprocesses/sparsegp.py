@@ -7,7 +7,6 @@ from uicsmodels.gaussianprocesses.gputil import sample_predictive
 
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
@@ -24,8 +23,6 @@ tfd = tfp.distributions
 tfb = tfp.bijectors
 
 JITTER = 1e-6
-
-from icecream import ic
 
 class SparseGPModel(FullGPModel):  
     """The latent Gaussian process model.  # TODO: Update description
@@ -413,7 +410,7 @@ class SparseGPModel(FullGPModel):
             A function that computes the log-likelihood of the model given a
             state.
         """
-        def loglikelihood_fn_(state: GibbsState, batch) -> Float:
+        def loglikelihood_fn_(state: GibbsState, batch=None) -> Float:
             # position = state.position
             # jax.debug.print('Using loglikelihood_fn!!!')
             position = getattr(state, 'position', state)
