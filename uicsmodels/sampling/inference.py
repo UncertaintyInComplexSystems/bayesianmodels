@@ -241,7 +241,7 @@ def smc_inference_loop(rng_key: PRNGKey,
     
     @jax.jit
     def one_step(carry):                
-        i, state, k, curr_log_likelihood = carry  # TODO: diff to BlackJAX example
+        i, state, k, curr_log_likelihood = carry  # NOTE: diff to BlackJAX example
         k, subk = jax.random.split(k, 2)
         state, info = smc_kernel(subk, state)        
         return i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment
