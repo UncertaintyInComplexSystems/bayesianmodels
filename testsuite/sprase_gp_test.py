@@ -1031,20 +1031,20 @@ def main(args):
 
 
     # sparse gp with MCMC-in-SMC
-    # run_model(
-    #     seeds=random_random_seeds,
-    #     id='sparseGP',
-    #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference,
-    #     root_path=path)
-    
-    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
     run_model(
         seeds=random_random_seeds,
-        id='sparseGP_sghmc',
+        id='sparseGP',
         num_runs = num_runs,
-        inference_fn=sparse_gp_inference_sghmc,
+        inference_fn=sparse_gp_inference,
         root_path=path)
+    
+    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='sparseGP_sghmc',
+    #     num_runs = num_runs,
+    #     inference_fn=sparse_gp_inference_sghmc,
+    #     root_path=path)
 
     # run marginal gp
     # run_model(
@@ -1061,31 +1061,3 @@ def main(args):
     #     num_runs = num_runs,
     #     inference_fn=latent_gp_inference,
     #     root_path=path)
-
-import jax
-import jax.numpy as jnp
-import jax.scipy.stats as stats
-import numpy as np
-
-import blackjax
-
-observed = np.random.normal(10, 20, size=1_000)
-def logdensity_fn(x):
-    logpdf = stats.norm.logpdf(observed, x["loc"], x["scale"])
-    return jnp.sum(logpdf)
-
-# Build the kernel
-step_size = 1e-3
-inverse_mass_matrix = jnp.array([1., 1.])
-nuts = blackjax.nuts(logdensity_fn, step_size, inverse_mass_matrix)
-
-# Initialize the state
-initial_position = {"loc": 1., "scale": 2.}
-state = nuts.init(initial_position)
-
-# Iterate
-rng_key = jax.random.key(0)
-step = jax.jit(nuts.step)
-for i in range(100):
-    nuts_key = jax.random.fold_in(rng_key, i)
-    state, _ = step(nuts_key, state)
