@@ -1029,20 +1029,20 @@ def main(args):
 
 
     # sparse gp with MCMC-in-SMC
-    run_model(
-        seeds=random_random_seeds,
-        id='sparseGP',
-        num_runs = num_runs,
-        inference_fn=sparse_gp_inference,
-        root_path=path)
-    
-    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
     # run_model(
     #     seeds=random_random_seeds,
-    #     id='sparseGP_sghmc',
+    #     id='sparseGP',
     #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference_sghmc,
+    #     inference_fn=sparse_gp_inference,
     #     root_path=path)
+    
+    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
+    run_model(
+        seeds=random_random_seeds,
+        id='sparseGP_sghmc',
+        num_runs = num_runs,
+        inference_fn=sparse_gp_inference_sghmc,
+        root_path=path)
 
     # run marginal gp
     # run_model(
