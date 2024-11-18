@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/modernization
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -77,12 +80,26 @@ venv.bak/
 .Trashes
 *.swp
 
+<<<<<<< HEAD
+=======
+# vs-code
+*.code-workspace
+
+>>>>>>> origin/modernization
 # others
 data
 environment.yml.bak
 *.pkl
 .DS_Store
+<<<<<<< HEAD
 environment.yml.bak
 remote_test.py
 
 results*
+=======
+remote_test.py
+
+results*
+
+
+>>>>>>> origin/modernization

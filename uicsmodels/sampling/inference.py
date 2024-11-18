@@ -16,7 +16,9 @@ from numpy import var
 from uicsmodels.gaussianprocesses.meanfunctions import Zero
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
-from blackjax import elliptical_slice, rmh
+from blackjax import elliptical_slice
+
+
 
 __all__ = ['inference_loop', 
            'smc_inference_loop', 
@@ -240,14 +242,14 @@ def smc_inference_loop(rng_key: PRNGKey,
     
     @jax.jit
     def one_step(carry):                
-        i, state, k, curr_log_likelihood = carry
+        i, state, k, curr_log_likelihood = carry  # NOTE: diff to BlackJAX example
         k, subk = jax.random.split(k, 2)
         state, info = smc_kernel(subk, state)        
         return i + 1, state, k, curr_log_likelihood + info.log_likelihood_increment
 
     #
-    n_iter, final_state, _, lml = jax.lax.while_loop(cond, one_step, 
-                                                      (0, initial_state, rng_key, 0))
+    n_iter, final_state, _, lml = jax.lax.while_loop(
+        cond, one_step, (0, initial_state, rng_key, 0))
 
     return n_iter, final_state, lml
 
@@ -340,7 +342,9 @@ def update_metropolis(key,
     for varval in vars_flattened:
         m += varval.shape[0] if varval.shape else 1
 
-    kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+    # kernel = rmh(logdensity, sigma=stepsize * jnp.eye(m))
+    kernel = blackjax.normal_random_walk(logdensity_fn=logdensity, sigma=stepsize * jnp.eye(m))
+
     rmh_state = kernel.init(variables)
     rmh_state, rmh_info = kernel.step(key, rmh_state)
     return rmh_state.position, rmh_info

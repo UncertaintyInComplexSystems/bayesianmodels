@@ -7,7 +7,6 @@ from uicsmodels.gaussianprocesses.gputil import sample_predictive
 
 from jax import Array
 from jaxtyping import Float
-from jax.random import PRNGKeyArray as PRNGKey
 from typing import Callable, Union, Dict, Any, Optional, Iterable, Mapping
 
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
@@ -24,8 +23,6 @@ tfd = tfp.distributions
 tfb = tfp.bijectors
 
 JITTER = 1e-6
-
-from icecream import ic
 
 class SparseGPModel(FullGPModel):  
     """The latent Gaussian process model.  # TODO: Update description

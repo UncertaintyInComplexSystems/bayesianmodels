@@ -12,13 +12,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from scipy import signal
 
+os.environ['JAX_ENABLE_X64'] = 'True'
 import jax
-from jax.config import config
-config.update("jax_enable_x64", True)  # crucial for Gaussian processes
-config.update("jax_debug_nans", False)
-config.update("jax_debug_infs", True)
-config.update("jax_disable_jit", False)
-
 import jax.random as jrnd
 import jax.numpy as jnp
 import distrax as dx
@@ -30,6 +25,10 @@ from jax.tree_util import tree_flatten
 from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
+
+
+import pathlib
+sys.path.append(str(pathlib.Path().resolve().parent))  # add parent directory to syspath to allow importing UiCS repo
 
 from uicsmodels.gaussianprocesses.sparsegp import SparseGPModel
 from uicsmodels.gaussianprocesses.fullgp import FullLatentGPModel
@@ -715,7 +714,7 @@ def sparse_gp_inference(
     logging.info('run inference')
     key, key_inference = jrnd.split(key)
     start = timer()
-    initial_particles, particles, _, marginal_likelihood = gp_sparse.inference(
+    particles, num_iter, marginal_likelihood = gp_sparse.inference(
         key_inference, 
         mode='gibbs-in-smc', 
         sampling_parameters=sampling_parameter)
@@ -771,7 +770,6 @@ def sparse_gp_inference(
         # x_pred = x_pred,
         # y_pred = y_pred,
         ground_truth = ground_truth,
-        initial_particles = initial_particles,
         particles = particles,
         marginal_likelihood = marginal_likelihood)
     

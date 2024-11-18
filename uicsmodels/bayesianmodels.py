@@ -27,8 +27,9 @@ from typing import Any, Union, NamedTuple, Dict, Any, Iterable, Mapping, Callabl
 from jaxtyping import Float
 ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
-import blackjax
-from blackjax import adaptive_tempered_smc, rmh
+import blackjax  # from blackjax import rmh
+from .blackjaxxx.smc.adaptive_tempered import adaptive_tempered_smc  # from blackjax import adaptive_tempered_smc
+
 import blackjax.smc.resampling as resampling
 from blackjax import sghmc
 from blackjax.sgmcmc import grad_estimator
@@ -171,7 +172,7 @@ class BayesianModel(ABC):
             m = 0            
             for prior in priors_flat:
                 m += jnp.prod(jnp.asarray(prior.batch_shape)) if prior.batch_shape else 1
-            sampling_parameters['kernel'] = rmh
+            sampling_parameters['kernel'] = blackjax.normal_random_walk  # rmh
             sampling_parameters['kernel_parameters'] = dict(sigma=sigma*jnp.eye(m))
 
 
@@ -181,15 +182,13 @@ class BayesianModel(ABC):
                 mcmc_init_fn = self.smc_init_fn
 
             elif mode == 'mcmc-in-smc':
-
                 # Set up tempered MCMC kernel
-                def mcmc_step_fn(key, state, temperature, **mcmc_parameters):
+                def mcmc_step_fn(key, state, tempered_logposterior_fn, temperature, **mcmc_parameters):  # added tempered_logposterior_fn for compatability with new BlackJAX
                     def apply_mcmc_kernel(key, logdensity, pos):
                         kernel = kernel_type(logdensity, **kernel_parameters)
                         state_ = kernel.init(pos)
                         state_, info = kernel.step(key, state_)
                         return state_.position, info
-                    
                     #
                     position = state.position.copy()
                     loglikelihood_fn_ = self.loglikelihood_fn()
@@ -251,7 +250,7 @@ class BayesianModel(ABC):
             if include_trace:
                 return particles, num_iter, marginal_likelihood, trace, temperature
             
-            return initial_particles, particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
+            return particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
         
         elif mode == 'gibbs' or mode == 'mcmc' or mode == 'sghmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
