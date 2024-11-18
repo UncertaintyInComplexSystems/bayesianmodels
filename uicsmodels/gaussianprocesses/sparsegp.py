@@ -413,7 +413,7 @@ class SparseGPModel(FullGPModel):
             A function that computes the log-likelihood of the model given a
             state.
         """
-        def loglikelihood_fn_(state: GibbsState, batch) -> Float:
+        def loglikelihood_fn_(state: GibbsState, batch=None) -> Float:
             # position = state.position
             # jax.debug.print('Using loglikelihood_fn!!!')
             position = getattr(state, 'position', state)

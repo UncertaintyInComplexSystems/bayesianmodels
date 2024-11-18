@@ -250,6 +250,7 @@ class BayesianModel(ABC):
 
             if include_trace:
                 return particles, num_iter, marginal_likelihood, trace, temperature
+            
             return initial_particles, particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
         
         elif mode == 'gibbs' or mode == 'mcmc' or mode == 'sghmc':
