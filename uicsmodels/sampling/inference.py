@@ -1,7 +1,6 @@
 import jax
 import blackjax
 import jax.numpy as jnp
-from jax_tqdm import scan_tqdm
 
 from jax import Array
 from jax.typing import ArrayLike
