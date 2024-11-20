@@ -13,6 +13,8 @@ import numpy as np
 from scipy import signal
 
 os.environ['JAX_ENABLE_X64'] = 'True'
+# os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
+# os.environ['JAX_DEBUG_NANS'] = 'True'
 import jax
 import jax.random as jrnd
 import jax.numpy as jnp
@@ -837,14 +839,8 @@ def sparse_gp_inference_sghmc(
 
     # Setup SGHMC
     sampling_parameter['kernel_parameters'] = dict(
-        num_integration_steps = 10)
-        # alpha = 0.01, 
-        # beta = 0)
-    
-    # used for NUTS
-    # sampling_parameter['kernel_parameters'] = dict(
-    #     step_size = 1e-3,
-    #     inverse_mass_matrix = jnp.eye((23))) # TODO: Revist choice of mass-matrix here. Size realtes to number of variables.
+        num_integration_steps=10)
+
 
     # inference
     logging.info('run inference')
@@ -857,6 +853,7 @@ def sparse_gp_inference_sghmc(
 
     print('inference output?')
     jax.debug.breakpoint()
+
 
     particles, _, marginal_likelihood = gp_sparse.inference(
         key_inference, 
@@ -1029,20 +1026,20 @@ def main(args):
 
 
     # sparse gp with MCMC-in-SMC
-    run_model(
-        seeds=random_random_seeds,
-        id='sparseGP',
-        num_runs = num_runs,
-        inference_fn=sparse_gp_inference,
-        root_path=path)
-    
-    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
     # run_model(
     #     seeds=random_random_seeds,
-    #     id='sparseGP_sghmc',
+    #     id='sparseGP',
     #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference_sghmc,
+    #     inference_fn=sparse_gp_inference,
     #     root_path=path)
+    
+    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
+    run_model(
+        seeds=random_random_seeds,
+        id='sparseGP_sghmc',
+        num_runs = num_runs,
+        inference_fn=sparse_gp_inference_sghmc,
+        root_path=path)
 
     # run marginal gp
     # run_model(

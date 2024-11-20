@@ -16,7 +16,7 @@ from uicsmodels.sampling.inference import inference_loop, smc_inference_loop, sm
 from uicsmodels.sampling.inference import update_metropolis
 
 from abc import ABC, abstractmethod
-
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -252,7 +252,7 @@ class BayesianModel(ABC):
             
             return particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
         
-        elif mode == 'gibbs' or mode == 'mcmc' or mode == 'sghmc':
+        elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
             num_samples = sampling_parameters.get('num_samples', 10_000)
             num_thin = sampling_parameters.get('num_thin', 1)
@@ -273,40 +273,6 @@ class BayesianModel(ABC):
                     'initial_state', 
                     kernel.init(self.init_fn(key_init).position))
 
-            elif mode == 'sghmc':
-                """
-                To initialize a SGHMC kernel one needs to specify a schedule function, which returns a step size at each sampling step, and a gradient estimator function. 
-                Here for a constant step size, and `data_size` data samples:
-                """
-                kernel_parameters = sampling_parameters.get('kernel_parameters')
-
-
-                grad_est = grad_estimator(
-                    self.logprior_fn(), 
-                    self.loglikelihood_fn(), 
-                    data_size = 100)  # QUESTION: What to choose here?
-                
-                # kernel = sghmc(
-                kernel = blackjax.sghmc(
-                    grad_estimator = grad_est, 
-                    **kernel_parameters)
-
-                # initial_state = sampling_parameters.get(
-                #     'initial_state', 
-                #     kernel.init(self.init_fn(key_init).position))
-                initial_state = self.init_fn(key_init).position
-
-                # jax.debug.breakpoint()
-
-                # kernel(key_inference, None, self.X, 0.1)  # TEst call
-
-                def step(rng_key, state):
-                    # adapt the sghmc step function 
-                    return kernel(rng_key, state, self.X , 1e-3), None
-
-                step_fn = step
-
-
             states = inference_loop(key_inference,
                                     step_fn,
                                     initial_state,
@@ -314,6 +280,76 @@ class BayesianModel(ABC):
             # remove burn-in
             self.states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
             return self.states
+        
+        elif mode == 'sghmc':
+
+            kernel_parameters = sampling_parameters.get('kernel_parameters')
+
+            n = self.X.shape[0]
+            step_size=1e-3
+            batch_size=1000
+            num_samples=50_000
+            num_burn=10_000
+            num_thin=500
+
+            key, key_init = jrnd.split(key)
+            keys_loop = jrnd.split(key, num_samples)
+
+            grad_est = grad_estimator(
+                self.logprior_fn(), 
+                self.loglikelihood_fn(), 
+                data_size = n)  # QUESTION: What to choose here?
+            
+            sghmc_kernel = blackjax.sghmc(
+                grad_estimator = grad_est, 
+                **kernel_parameters)
+            
+            initial_state = self.init_fn(key_init).position
+
+            def batch_data(rng_key, data, batch_size, data_size):
+                """Return an iterator over batches of data."""
+                # from blackjax tutorial https://blackjax-devs.github.io/sampling-book/models/mlp.html#multi-layer-perceptron
+                while True:
+                    _, rng_key = jax.random.split(rng_key)
+                    idx = jax.random.choice(
+                        key=rng_key, a=jnp.arange(data_size), shape=(batch_size,)
+                    )
+                    minibatch = data[idx]
+                    yield minibatch
+
+            batches_x = batch_data(key, self.X, batch_size, n)
+            batches_y = batch_data(key, self.y, batch_size, n)
+
+            # Y_ = jnp.atleast_2d(self.y).T  #  this is needed for the dynamic slicing below
+
+            # @jax.jit
+            def one_step(state, key):        
+                def get_minibatch(data, indices):
+                    # from max
+                    return jax.vmap(lambda i: jax.lax.dynamic_slice(data, (i, 0), (1, data.shape[1])))(indices).squeeze(1)
+            
+                key_sghmc, key_batch = jrnd.split(key, 2)
+                # idx = jrnd.choice(key_batch, n, shape=(batch_size, ), replace=False)
+                # minibatch_X = get_minibatch(self.X, idx)
+                # minibatch_Y = get_minibatch(Y_, idx)
+                minibatch_X = next(batches_x)
+                minibatch_Y = next(batches_y)
+
+                new_state = sghmc_kernel.step(key_sghmc, state, (minibatch_X, minibatch_Y), step_size)    
+                return new_state, new_state
+        
+            #
+
+            _, states = jax.lax.scan(one_step, initial_state, keys_loop)
+
+            jax.debug.breakpoint()
+
+            states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
+
+            return states
+        
+        
+
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')
 

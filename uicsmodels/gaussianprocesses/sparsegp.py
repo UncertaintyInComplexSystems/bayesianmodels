@@ -136,7 +136,7 @@ class SparseGPModel(FullGPModel):
         return GibbsState(initial_position)
 
 
-    def _loglikelihood_fn_fitc(self, u, Z, theta, sigma):
+    def _loglikelihood_fn_fitc(self, u, Z, theta, sigma, batch_x=None):
         """
         log-density log p(y | u, Z, theta), used in very Gibbs update step
         defined in the Rossi et al. 2021, eq. 14, 15, 17
@@ -150,11 +150,16 @@ class SparseGPModel(FullGPModel):
         Returns:
             (_type_): sum of log p(y | u, Z, theta) 
         """
+
+        if batch_x is None:
+            x_ = self.X
+        else:
+            x_ = batch_x
         
         # compute needed covariance matricies 
         cov_XX = self.cov_fn.cross_covariance(
             params=theta,
-            x=self.X, y=self.X)
+            x=x_, y=x_)
         cov_XX += JITTER * jnp.eye(*cov_XX.shape)
 
         cov_ZZ = self.cov_fn.cross_covariance(
@@ -164,7 +169,7 @@ class SparseGPModel(FullGPModel):
 
         cov_XZ = self.cov_fn.cross_covariance(
             params=theta,
-            x=self.X, y=Z)  # shape: (N, M), (x.shape[0], Z.shape[0])
+            x=x_, y=Z)  # shape: (N, M), (x.shape[0], Z.shape[0])
         cov_XZ += JITTER * jnp.eye(*cov_XZ.shape)
 
         # compute mean, eq. 14
@@ -180,7 +185,6 @@ class SparseGPModel(FullGPModel):
         log_prob = dx.Normal(means, vars + sigma).log_prob(self.y) 
 
         # TODO use vmap to get the diag of the cross-covariance instead of computing the whole cross-covariance myself. Other solutions are also fine.
-
         return jnp.sum(log_prob)
 
     
@@ -411,16 +415,18 @@ class SparseGPModel(FullGPModel):
             state.
         """
         def loglikelihood_fn_(state: GibbsState, batch=None) -> Float:
-            # position = state.position
-            # jax.debug.print('Using loglikelihood_fn!!!')
             position = getattr(state, 'position', state)
-            phi = state.get('likelihood', {})  # QUESTION: How is this different to getattr?
+
+            
+            if batch:
+                batch_X, batch_Y = batch
 
             return self._loglikelihood_fn_fitc(
                     u=position['u'],
                     Z=position['inducing_points']['Z'], 
                     theta=position.get('kernel', {}), 
-                    sigma=position.get('likelihood', {})['obs_noise'])
+                    sigma=position.get('likelihood', {})['obs_noise'],
+                    batch_x=batch_X if batch else None)
 
         #
         return loglikelihood_fn_
