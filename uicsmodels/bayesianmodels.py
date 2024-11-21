@@ -33,6 +33,7 @@ from .blackjaxxx.smc.adaptive_tempered import adaptive_tempered_smc  # from blac
 import blackjax.smc.resampling as resampling
 from blackjax import sghmc
 from blackjax.sgmcmc import grad_estimator
+from blackjax.util import generate_gaussian_noise
 
 from jax.tree_util import tree_flatten, tree_unflatten, tree_map
 from distrax._src.distributions.distribution import Distribution
@@ -286,11 +287,14 @@ class BayesianModel(ABC):
             kernel_parameters = sampling_parameters.get('kernel_parameters')
 
             n = self.X.shape[0]
-            step_size=1e-3
-            batch_size=1000
-            num_samples=50_000
-            num_burn=10_000
-            num_thin=500
+            step_size=0.0000006
+            batch_size=100
+            num_samples=10_000
+
+            num_burn=10_0
+            num_thin=1
+
+            jax.debug.print('data:\n   {x},\n  {y}', x=self.X.shape, y=self.y.shape)
 
             key, key_init = jrnd.split(key)
             keys_loop = jrnd.split(key, num_samples)
@@ -305,6 +309,7 @@ class BayesianModel(ABC):
                 **kernel_parameters)
             
             initial_state = self.init_fn(key_init).position
+            # jax.debug.print('initial state:\n   {s}', s=initial_state)
 
             def batch_data(rng_key, data, batch_size, data_size):
                 """Return an iterator over batches of data."""
@@ -322,29 +327,34 @@ class BayesianModel(ABC):
 
             # Y_ = jnp.atleast_2d(self.y).T  #  this is needed for the dynamic slicing below
 
-            # @jax.jit
+            @jax.jit
             def one_step(state, key):        
-                def get_minibatch(data, indices):
-                    # from max
-                    return jax.vmap(lambda i: jax.lax.dynamic_slice(data, (i, 0), (1, data.shape[1])))(indices).squeeze(1)
-            
+                # def get_minibatch(data, indices):
+                #     # from max
+                #     return jax.vmap(lambda i: jax.lax.dynamic_slice(data, (i, 0), (1, data.shape[1])))(indices).squeeze(1)
+                # jax.debug.print('step state:\n   {s}', s=state)
+                jax.debug.print('\nstep')
+                
                 key_sghmc, key_batch = jrnd.split(key, 2)
                 # idx = jrnd.choice(key_batch, n, shape=(batch_size, ), replace=False)
                 # minibatch_X = get_minibatch(self.X, idx)
                 # minibatch_Y = get_minibatch(Y_, idx)
                 minibatch_X = next(batches_x)
                 minibatch_Y = next(batches_y)
+                # jax.debug.print('batch:\n   {x},\n  {y}', x=minibatch_X.shape, y=minibatch_Y.shape)
 
-                new_state = sghmc_kernel.step(key_sghmc, state, (minibatch_X, minibatch_Y), step_size)    
+                new_state = sghmc_kernel.step(key_sghmc, state, (minibatch_X, minibatch_Y), step_size)
+
+                # jax.debug.print('step new state Z:\n   {s}', s=new_state['inducing_points']['Z'])
+                # jax.debug.breakpoint()
+
                 return new_state, new_state
-        
-            #
 
             _, states = jax.lax.scan(one_step, initial_state, keys_loop)
 
-            jax.debug.breakpoint()
+            # jax.debug.breakpoint()
 
-            states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
+            self.states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
 
             return states
         
@@ -358,7 +368,7 @@ class BayesianModel(ABC):
         if mode == 'smc' and hasattr(self, 'particles'):
             return self.particles.particles
         elif mode == 'mcmc' and hasattr(self, 'states'):
-            return self.states.position
+            return self.states
          
 
     #

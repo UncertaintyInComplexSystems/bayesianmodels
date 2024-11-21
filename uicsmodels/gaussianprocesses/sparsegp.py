@@ -136,7 +136,7 @@ class SparseGPModel(FullGPModel):
         return GibbsState(initial_position)
 
 
-    def _loglikelihood_fn_fitc(self, u, Z, theta, sigma, batch_x=None):
+    def _loglikelihood_fn_fitc(self, u, Z, theta, sigma, minibatch=None):
         """
         log-density log p(y | u, Z, theta), used in very Gibbs update step
         defined in the Rossi et al. 2021, eq. 14, 15, 17
@@ -151,10 +151,15 @@ class SparseGPModel(FullGPModel):
             (_type_): sum of log p(y | u, Z, theta) 
         """
 
-        if batch_x is None:
+        if minibatch is None:
             x_ = self.X
+            y_ = self.y
+            jax.debug.print('not batched likelihood!')
         else:
-            x_ = batch_x
+            x_, y_ = minibatch
+            # jax.debug.print('batched likelihood! : \n   {s},\n   {ss}', s=x_, ss=y_)
+
+        jax.debug.print('z: {z}, u: {u}', z=Z, u=u)
         
         # compute needed covariance matricies 
         cov_XX = self.cov_fn.cross_covariance(
@@ -182,7 +187,9 @@ class SparseGPModel(FullGPModel):
         vars = jnp.diag(cov_XX - jnp.dot(cov_XZ, ZZ_ZX))
 
         # eval. pdf
-        log_prob = dx.Normal(means, vars + sigma).log_prob(self.y) 
+        # jax.debug.print('means: {m}\n vars: {v}\n sigma: {s}', m=means, v=vars, s=sigma)
+        log_prob = dx.Normal(means, vars + sigma).log_prob(y_)
+        # jax.debug.print('log_prob: {s}',s=log_prob)
 
         # TODO use vmap to get the diag of the cross-covariance instead of computing the whole cross-covariance myself. Other solutions are also fine.
         return jnp.sum(log_prob)
@@ -417,16 +424,18 @@ class SparseGPModel(FullGPModel):
         def loglikelihood_fn_(state: GibbsState, batch=None) -> Float:
             position = getattr(state, 'position', state)
 
-            
-            if batch:
-                batch_X, batch_Y = batch
 
-            return self._loglikelihood_fn_fitc(
+            log_like = self._loglikelihood_fn_fitc(
                     u=position['u'],
                     Z=position['inducing_points']['Z'], 
                     theta=position.get('kernel', {}), 
                     sigma=position.get('likelihood', {})['obs_noise'],
-                    batch_x=batch_X if batch else None)
+                    minibatch=batch)
+
+            # jax.debug.print('{s}, {t}', s=log_like, t=jnp.exp(log_like))
+
+
+            return log_like
 
         #
         return loglikelihood_fn_
@@ -523,6 +532,7 @@ class SparseGPModel(FullGPModel):
             cov_XsZ = compute_cov(xs, z)  # shape: (num_targets, M)
 
             # compute alpha
+            jax.debug.breakpoint()
             diag_noise = likelihood['obs_noise'] * jnp.eye(*cov_XX.shape)
 
             XZ_ZZ_ZX = jnp.dot(
@@ -531,11 +541,13 @@ class SparseGPModel(FullGPModel):
             alpha = (cov_XX - XZ_ZZ_ZX + diag_noise) * jnp.eye(*cov_XX.shape)  # keeping only the values along the diagonal  # NOTE: Used jnp.eye instead of jnp.diag.
 
             # compute sigma fitc
+            jax.debug.breakpoint()
             sigma_fitc = cov_ZZ + jnp.dot(
                 jnp.transpose(cov_XZ), 
                 jnp.linalg.solve(alpha, cov_XZ))  # NOTE: in the paper this equation is inverted. I left it out to compute the inverse implicitly when Sigma is used. 
 
             # compute mu fitc
+            jax.debug.breakpoint()
             mu_fitc = jnp.dot(
                 cov_XsZ,
                 jnp.dot(
@@ -545,7 +557,7 @@ class SparseGPModel(FullGPModel):
             )  # shape (num_targets, )
 
             # compute variance (sigma^2) fitc
-
+            jax.debug.breakpoint()
             # XsZ_ZZ_ZXs = jnp.dot(
             #     cov_XsZ,
             #     jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XsZ)))
@@ -564,6 +576,7 @@ class SparseGPModel(FullGPModel):
             var_fitc += JITTER * jnp.eye(*var_fitc.shape)
 
             # draw samples
+            jax.debug.breakpoint()
             if jnp.ndim(xs) == 1:
                 L = jnp.linalg.cholesky(var_fitc)
                 u = jrnd.normal(key, shape=(len(xs),))

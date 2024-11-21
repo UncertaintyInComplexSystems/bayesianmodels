@@ -14,7 +14,7 @@ from scipy import signal
 
 os.environ['JAX_ENABLE_X64'] = 'True'
 # os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
-# os.environ['JAX_DEBUG_NANS'] = 'True'
+# os.environ['JAX_DISABLE_JIT'] = 'True'
 import jax
 import jax.random as jrnd
 import jax.numpy as jnp
@@ -846,16 +846,7 @@ def sparse_gp_inference_sghmc(
     logging.info('run inference')
     key, key_inference = jrnd.split(key)
     start = timer()
-    output = gp_sparse.inference(
-        key_inference, 
-        mode='sghmc', 
-        sampling_parameters=sampling_parameter)
-
-    print('inference output?')
-    jax.debug.breakpoint()
-
-
-    particles, _, marginal_likelihood = gp_sparse.inference(
+    particles = gp_sparse.inference(
         key_inference, 
         mode='sghmc', 
         sampling_parameters=sampling_parameter)
