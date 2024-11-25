@@ -159,7 +159,7 @@ class SparseGPModel(FullGPModel):
             x_, y_ = minibatch
             # jax.debug.print('batched likelihood! : \n   {s},\n   {ss}', s=x_, ss=y_)
 
-        jax.debug.print('z: {z}, u: {u}', z=Z, u=u)
+        # jax.debug.print('z: {z}, u: {u}', z=Z, u=u)
         
         # compute needed covariance matricies 
         cov_XX = self.cov_fn.cross_covariance(
@@ -191,7 +191,7 @@ class SparseGPModel(FullGPModel):
         log_prob = dx.Normal(means, vars + sigma).log_prob(y_)
         # jax.debug.print('log_prob: {s}',s=log_prob)
 
-        # TODO use vmap to get the diag of the cross-covariance instead of computing the whole cross-covariance myself. Other solutions are also fine.
+        # TODO use vmap or smth. else to get the diag of the cross-covariance instead of computing the whole cross-covariance myself.
         return jnp.sum(log_prob)
 
     
@@ -422,8 +422,7 @@ class SparseGPModel(FullGPModel):
             state.
         """
         def loglikelihood_fn_(state: GibbsState, batch=None) -> Float:
-            position = getattr(state, 'position', state)
-
+            position = getattr(state, 'position', state)  # to work in both Blackjax' MCMC and SMC environments
 
             log_like = self._loglikelihood_fn_fitc(
                     u=position['u'],
@@ -431,9 +430,6 @@ class SparseGPModel(FullGPModel):
                     theta=position.get('kernel', {}), 
                     sigma=position.get('likelihood', {})['obs_noise'],
                     minibatch=batch)
-
-            # jax.debug.print('{s}, {t}', s=log_like, t=jnp.exp(log_like))
-
 
             return log_like
 
@@ -481,7 +477,7 @@ class SparseGPModel(FullGPModel):
 
 
     # TODO rename? 
-    def predict_f(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc'):
+    def predict_f(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc', samples=None):
         """ see Rossi eq. 16
         """
 
@@ -532,7 +528,6 @@ class SparseGPModel(FullGPModel):
             cov_XsZ = compute_cov(xs, z)  # shape: (num_targets, M)
 
             # compute alpha
-            jax.debug.breakpoint()
             diag_noise = likelihood['obs_noise'] * jnp.eye(*cov_XX.shape)
 
             XZ_ZZ_ZX = jnp.dot(
@@ -541,13 +536,11 @@ class SparseGPModel(FullGPModel):
             alpha = (cov_XX - XZ_ZZ_ZX + diag_noise) * jnp.eye(*cov_XX.shape)  # keeping only the values along the diagonal  # NOTE: Used jnp.eye instead of jnp.diag.
 
             # compute sigma fitc
-            jax.debug.breakpoint()
             sigma_fitc = cov_ZZ + jnp.dot(
                 jnp.transpose(cov_XZ), 
                 jnp.linalg.solve(alpha, cov_XZ))  # NOTE: in the paper this equation is inverted. I left it out to compute the inverse implicitly when Sigma is used. 
 
             # compute mu fitc
-            jax.debug.breakpoint()
             mu_fitc = jnp.dot(
                 cov_XsZ,
                 jnp.dot(
@@ -557,7 +550,6 @@ class SparseGPModel(FullGPModel):
             )  # shape (num_targets, )
 
             # compute variance (sigma^2) fitc
-            jax.debug.breakpoint()
             # XsZ_ZZ_ZXs = jnp.dot(
             #     cov_XsZ,
             #     jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XsZ)))
@@ -576,7 +568,6 @@ class SparseGPModel(FullGPModel):
             var_fitc += JITTER * jnp.eye(*var_fitc.shape)
 
             # draw samples
-            jax.debug.breakpoint()
             if jnp.ndim(xs) == 1:
                 L = jnp.linalg.cholesky(var_fitc)
                 u = jrnd.normal(key, shape=(len(xs),))
@@ -588,7 +579,10 @@ class SparseGPModel(FullGPModel):
             return pred
 
         # extract parameters and samples from data structure
-        samples = self.get_monte_carlo_samples(mode=inference_mode)
+        if samples:
+            samples = samples
+        else:
+            samples = self.get_monte_carlo_samples(mode=inference_mode)
 
         cov_params = samples['kernel']
         Z = samples['inducing_points']['Z']

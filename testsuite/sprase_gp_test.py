@@ -6,6 +6,7 @@ from timeit import default_timer as timer
 import configparser
 import pickle
 from typing import Callable
+from math import ceil
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -14,7 +15,12 @@ from scipy import signal
 
 os.environ['JAX_ENABLE_X64'] = 'True'
 # os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
-# os.environ['JAX_DISABLE_JIT'] = 'True'
+# os.environ['JAX_DEBUG_NANS'] = 'True'
+
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.90'  # how much prereallocate
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"  # don't preallocate
+os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'  # allocate what is needed and free what is not
+
 import jax
 import jax.random as jrnd
 import jax.numpy as jnp
@@ -22,7 +28,7 @@ import distrax as dx
 from distrax._src.distributions.distribution import Distribution
 from distrax._src.bijectors.bijector import Bijector
 import jaxkern as jk
-from jax.tree_util import tree_flatten
+from jax.tree_util import tree_flatten, tree_map
 
 from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
@@ -140,8 +146,8 @@ def summary_stats_from_log(path_logfile):
             mean = np.mean(exec_times)
             ),
         mean_squared_error=dict(
-            mean = np.mean(mse),
-            variance = np.var(mse)
+            mean = np.mean(mse) if mse else jnp.nan,
+            variance = np.var(mse) if mse else jnp.nan
             ),
         )
     
@@ -422,21 +428,21 @@ def plot_predictive_f(
 
     # setup plotting
     fig, axes = plt.subplots(
-        nrows=3, ncols=1, figsize=(12, 10.5), 
+        nrows=2, ncols=1, figsize=(12, 10), 
         sharex=True, sharey=True, 
         constrained_layout=True)
 
     # ax0; plot each particle
-    num_particles = y_pred.shape[0]
-    ax = axes[0]
-    for i in jnp.arange(0, num_particles, step=10):
-        ax.plot(
-            x_pred, y_pred[i, :], color='tab:blue', 
-            alpha=0.1, zorder=2, label='' if i>0 else 'particle')
-    ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
+    # num_particles = y_pred.shape[0]
+    # ax = axes[0]
+    # for i in jnp.arange(0, num_particles, step=10):
+    #     ax.plot(
+    #         x_pred, y_pred[i, :], color='tab:blue', 
+    #         alpha=0.1, zorder=2, label='' if i>0 else 'particle')
+    # ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
 
     # ax1; mean and HDI over particles
-    ax = axes[1]
+    ax = axes[0]
     ax.plot(points_x, points_y, 'x', label=points_label, color=points_color, alpha=0.7)
     f_mean = jnp.mean(y_pred, axis=0)
     f_hdi_lower = jnp.percentile(y_pred, q=2.5, axis=0)
@@ -451,7 +457,7 @@ def plot_predictive_f(
     
     # ax2; inducing points each particle
     if 'inducing_points' in particles.keys():
-        ax = axes[2]
+        ax = axes[1]
         ax.errorbar(
             points_x, points_y, 
             xerr= jnp.std(particles['inducing_points']['Z'], axis=0), 
@@ -835,12 +841,11 @@ def sparse_gp_inference_sghmc(
     gp_sparse = SparseGPModel(
         x, y, 
         cov_fn=jk.RBF(), 
-        priors=priors)  
+        priors=priors)
 
     # Setup SGHMC
     sampling_parameter['kernel_parameters'] = dict(
         num_integration_steps=10)
-
 
     # inference
     logging.info('run inference')
@@ -855,69 +860,128 @@ def sparse_gp_inference_sghmc(
         '{\'execution_time_sec\': ' + f'{(timer() - start)}' + '}')
     logging.info(
         'execution_time_min: ' + f'{(timer() - start)/60}')
-
+    
+    
     # Sort Z and u following Z.
     sorted_inducing_indices = jnp.argsort(particles['inducing_points']['Z'], axis=1)
     particles['inducing_points']['Z'] = jnp.take_along_axis(
         particles['inducing_points']['Z'], sorted_inducing_indices, axis=1)
     particles['u'] = jnp.take_along_axis(
         particles['u'], sorted_inducing_indices, axis=1)
+    del sorted_inducing_indices
+
+    #
+    logging.info('generate traceplots')
+    title = 'samples'
+
+    to_plot = dict(
+        u = particles['u'],
+        z = particles['inducing_points']['Z'],
+        sigma = particles['likelihood']['obs_noise'],
+        lengthscale = particles['kernel']['lengthscale'],
+        variance = particles['kernel']['variance']
+        )
+
+    num_subplots = len(to_plot)
+    _, axs = plt.subplots(
+            nrows=num_subplots, ncols=1, 
+            constrained_layout=True,
+            sharex=False, sharey=False, figsize=(12, 8*num_subplots))
+
+    for i, (var_name, samples) in enumerate(to_plot.items()):
+
+        xz = jnp.arange(samples.shape[0])
+        
+        ax = axs if type(axs) == plt.Axes else axs[i]
+        if len(samples.shape) == 2:
+            for iz in range(samples.shape[1]):
+                ax.plot(xz, samples[:, iz], alpha=0.5)
+        else:
+            ax.plot(xz, samples, alpha=0.5)
+
+        ax.set_xlabel('num_samples')
+        ax.set_ylabel(var_name)
+
+    plt.suptitle(title)
+    plt.savefig(
+        f'./{path}/' + title.replace(' ', '_').replace('\n', '_').replace('$', ''))
+    plt.close()
+
+        # compute mean squared error between predictive and true f
+    def mse(approx, true):
+        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
+    
+
+    #
+    # logging.info(f'generate predictive. ')
+    # batch_size_pred = 1000
+
+    # def batch_tree(batch_size, tree, num_datapoints):
+    #     """
+    #     num_datapoints: data per 'leaf'
+    #     """
+    #     n_batches = ceil(num_datapoints / batch_size)
+    #     idxs = jnp.array(jnp.arange(num_datapoints))
+    #     batch_idxs = jnp.array_split(idxs, n_batches)
+    #     tree_batches = []
+    #     for idxs in batch_idxs:
+    #         tree_batches.append(tree_map(lambda x: x[idxs], tree))
+    #     return tree_batches
+
+    # key, key_pred = jrnd.split(key)
+    # particle_batches=batch_tree(batch_size_pred, particles, particles['u'].shape[0])
+
+    # num_pred = 100
+    # x_pred = jnp.linspace(-1, 1, num=num_pred)
+
+    # y_pred_batches = []
+    # for i, cur_batch in enumerate(particle_batches):
+    #     logging.info(f'predictive batch {i}/{len(particle_batches)}')
+    #     _, key_pred = jrnd.split(key_pred)
+    #     y_pred = gp_sparse.predict_f(
+    #         key_pred, x_pred, inference_mode='mcmc', samples=cur_batch)
+    #     y_pred_batches.append(y_pred)
+    
+    # y_pred = jnp.concatenate(y_pred_batches, axis=0)
 
 
-    logging.info('generate predictive')
-    key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=x.shape[0])
-    y_pred = gp_sparse.predict_f(key_pred, x_pred, inference_mode='mcmc')
+    # jax.debug.breakpoint()
 
-    # plot results
     logging.info('generate plots')
 
-    # logging.info('call plot_smc')
-    # sub_title = ''
-    # plot_smc(
-    #     x, y, particles.particles, ground_truth, 
-    #     title=f'Sparse GP' + sub_title,
-    #     folder=path)
-    
-    logging.info('call plot_predictive')
-    z = jnp.mean(particles['inducing_points']['Z'], axis=0)
-    u = jnp.mean(particles['u'], axis=0)
-    plot_predictive_f(
-        particles = particles,
-        points_x=z, points_y=u, 
-        points_label='inducing points (mean)', points_color=colors['red'],
-        x_true=x, f_true=ground_truth.get('f'),
-        x_pred=x_pred,
-        y_pred=y_pred,
-        title='Sparse GP\npredictive',
-        folder=path)
+    # 
 
-    z = jnp.mean(particles['inducing_points']['Z'], axis=0)
-    u = jnp.mean(particles['u'], axis=0)
-    
+    # logging.info('call plot_predictive')
+    # z = jnp.mean(particles['inducing_points']['Z'], axis=0)
+    # u = jnp.mean(particles['u'], axis=0)
+    # plot_predictive_f(
+    #     particles = particles,
+    #     points_x=z, points_y=u, 
+    #     points_label='inducing points (mean)', points_color=colors['red'],
+    #     x_true=x, f_true=ground_truth.get('f'),
+    #     x_pred=x_pred,
+    #     y_pred=y_pred,
+    #     title='Sparse GP\npredictive',
+    #     folder=path)
+
+    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+
     # pickle data and infernece output for combining the results later
-    logging.info('pickle data and inference output')
+    # logging.info('pickle data and inference output')
     to_pickle = dict(
         x = x,
         y = y,
         x_pred = x_pred,
         y_pred = y_pred,
         ground_truth = ground_truth,
-        particles = particles,
-        marginal_likelihood = marginal_likelihood)
+        particles = particles)
     
     for dkey in to_pickle:
         logging.debug('pickle ' + path+f'{dkey}.pickle')
         with open(path+f'{dkey}.pickle', 'wb') as file_handle:
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # compute mean squared error between predictive and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
-
-    mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
-    logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
 
 def main(args):
