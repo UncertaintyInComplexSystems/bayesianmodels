@@ -16,6 +16,7 @@ from scipy import signal
 os.environ['JAX_ENABLE_X64'] = 'True'
 # os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
 # os.environ['JAX_DEBUG_NANS'] = 'True'
+# os.environ['JAX_DISABLE_JIT']='True'
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.90'  # how much prereallocate
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"  # don't preallocate
@@ -152,6 +153,17 @@ def summary_stats_from_log(path_logfile):
         )
     
     return summary_stats
+
+
+def compute_mse(approx, true):
+    """
+    compute mean squared error
+    """
+    r = jnp.mean(jnp.square(jnp.subtract(approx, true)))
+    if jnp.isnan(r):
+        return 0
+    else:
+        return r 
 
 
 ## generate toy data
@@ -570,10 +582,6 @@ def latent_gp_inference(
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # compute mean squared error between f particle mean and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
-
     mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
@@ -666,10 +674,6 @@ def marginal_gp_inference(
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # compute mean squared error between f particle mean and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
-
     mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
@@ -744,6 +748,8 @@ def sparse_gp_inference(
     x_pred = jnp.linspace(-1, 1, num=x.shape[0])
     y_pred = gp_sparse.predict_f(key_pred, x_pred)
 
+    print(y_pred.shape)
+
     # plot results
     logging.info('generate plots')
 
@@ -787,11 +793,7 @@ def sparse_gp_inference(
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # compute mean squared error between predictive and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
-
-    mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    mse = compute_mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
     del gp_sparse
@@ -907,81 +909,70 @@ def sparse_gp_inference_sghmc(
         f'./{path}/' + title.replace(' ', '_').replace('\n', '_').replace('$', ''))
     plt.close()
 
-        # compute mean squared error between predictive and true f
-    def mse(approx, true):
-        return jnp.mean(jnp.square(jnp.subtract(approx, true)))
-    
-
     #
-    # logging.info(f'generate predictive. ')
-    # batch_size_pred = 1000
+    logging.info(f'generate predictive. ')
+    batch_size_pred = 1000
 
-    # def batch_tree(batch_size, tree, num_datapoints):
-    #     """
-    #     num_datapoints: data per 'leaf'
-    #     """
-    #     n_batches = ceil(num_datapoints / batch_size)
-    #     idxs = jnp.array(jnp.arange(num_datapoints))
-    #     batch_idxs = jnp.array_split(idxs, n_batches)
-    #     tree_batches = []
-    #     for idxs in batch_idxs:
-    #         tree_batches.append(tree_map(lambda x: x[idxs], tree))
-    #     return tree_batches
+    def batch_tree(batch_size, tree, num_datapoints):
+        """
+        num_datapoints: data per 'leaf'
+        """
+        n_batches = ceil(num_datapoints / batch_size)
+        idxs = jnp.array(jnp.arange(num_datapoints))
+        batch_idxs = jnp.array_split(idxs, n_batches)
+        tree_batches = []
+        for idxs in batch_idxs:
+            tree_batches.append(tree_map(lambda x: x[idxs], tree))
+        return tree_batches
 
-    # key, key_pred = jrnd.split(key)
-    # particle_batches=batch_tree(batch_size_pred, particles, particles['u'].shape[0])
+    key, key_pred = jrnd.split(key)
+    particle_batches=batch_tree(batch_size_pred, particles, particles['u'].shape[0])
 
-    # num_pred = 100
-    # x_pred = jnp.linspace(-1, 1, num=num_pred)
+    num_pred = 100
+    x_pred = jnp.linspace(-1, 1, num=num_pred)
 
-    # y_pred_batches = []
-    # for i, cur_batch in enumerate(particle_batches):
-    #     logging.info(f'predictive batch {i}/{len(particle_batches)}')
-    #     _, key_pred = jrnd.split(key_pred)
-    #     y_pred = gp_sparse.predict_f(
-    #         key_pred, x_pred, inference_mode='mcmc', samples=cur_batch)
-    #     y_pred_batches.append(y_pred)
+    y_pred_batches = []
+    for i, cur_batch in enumerate(particle_batches):
+        logging.info(f'predictive batch {i}/{len(particle_batches)}')
+        _, key_pred = jrnd.split(key_pred)
+        y_pred = gp_sparse.predict_f(
+            key_pred, x_pred, inference_mode='mcmc', samples=cur_batch)
+        y_pred_batches.append(y_pred)
     
-    # y_pred = jnp.concatenate(y_pred_batches, axis=0)
+    y_pred = jnp.concatenate(y_pred_batches, axis=0)
 
 
-    # jax.debug.breakpoint()
-
-    logging.info('generate plots')
-
-    # 
-
-    # logging.info('call plot_predictive')
-    # z = jnp.mean(particles['inducing_points']['Z'], axis=0)
-    # u = jnp.mean(particles['u'], axis=0)
-    # plot_predictive_f(
-    #     particles = particles,
-    #     points_x=z, points_y=u, 
-    #     points_label='inducing points (mean)', points_color=colors['red'],
-    #     x_true=x, f_true=ground_truth.get('f'),
-    #     x_pred=x_pred,
-    #     y_pred=y_pred,
-    #     title='Sparse GP\npredictive',
-    #     folder=path)
+    logging.info('plot predictive')
+    z = jnp.mean(particles['inducing_points']['Z'], axis=0)
+    u = jnp.mean(particles['u'], axis=0)
+    plot_predictive_f(
+        particles = particles,
+        points_x=z, points_y=u, 
+        points_label='inducing points (mean)', points_color=colors['red'],
+        x_true=x, f_true=ground_truth.get('f'),
+        x_pred=x_pred,
+        y_pred=y_pred,
+        title='Sparse GP\npredictive',
+        folder=path)
 
     # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
     # pickle data and infernece output for combining the results later
     # logging.info('pickle data and inference output')
-    to_pickle = dict(
-        x = x,
-        y = y,
-        x_pred = x_pred,
-        y_pred = y_pred,
-        ground_truth = ground_truth,
-        particles = particles)
+    # to_pickle = dict(
+    #     x = x,
+    #     y = y,
+    #     x_pred = x_pred,
+    #     y_pred = y_pred,
+    #     ground_truth = ground_truth,
+    #     particles = particles)
     
-    for dkey in to_pickle:
-        logging.debug('pickle ' + path+f'{dkey}.pickle')
-        with open(path+f'{dkey}.pickle', 'wb') as file_handle:
-            pickle.dump(
-                to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+    # for dkey in to_pickle:
+    #     logging.debug('pickle ' + path+f'{dkey}.pickle')
+    #     with open(path+f'{dkey}.pickle', 'wb') as file_handle:
+    #         pickle.dump(
+    #             to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def main(args):
@@ -1081,20 +1072,20 @@ def main(args):
 
 
     # sparse gp with MCMC-in-SMC
-    # run_model(
-    #     seeds=random_random_seeds,
-    #     id='sparseGP',
-    #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference,
-    #     root_path=path)
-    
-    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
     run_model(
         seeds=random_random_seeds,
-        id='sparseGP_sghmc',
+        id='sparseGP',
         num_runs = num_runs,
-        inference_fn=sparse_gp_inference_sghmc,
+        inference_fn=sparse_gp_inference,
         root_path=path)
+    
+    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
+    # run_model(
+    #     seeds=random_random_seeds,
+    #     id='sparseGP_sghmc',
+    #     num_runs = num_runs,
+    #     inference_fn=sparse_gp_inference_sghmc,
+    #     root_path=path)
 
     # run marginal gp
     # run_model(

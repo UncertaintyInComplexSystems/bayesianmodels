@@ -289,7 +289,7 @@ class BayesianModel(ABC):
             n = self.X.shape[0]
             step_size=0.00005
             batch_size=500
-            num_samples=100_000
+            num_samples=1_000
 
             num_burn=50_000
             num_thin=1

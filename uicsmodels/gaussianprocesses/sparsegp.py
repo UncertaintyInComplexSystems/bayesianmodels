@@ -154,12 +154,8 @@ class SparseGPModel(FullGPModel):
         if minibatch is None:
             x_ = self.X
             y_ = self.y
-            jax.debug.print('not batched likelihood!')
         else:
             x_, y_ = minibatch
-            # jax.debug.print('batched likelihood! : \n   {s},\n   {ss}', s=x_, ss=y_)
-
-        # jax.debug.print('z: {z}, u: {u}', z=Z, u=u)
         
         # compute needed covariance matricies 
         cov_XX = self.cov_fn.cross_covariance(
@@ -476,22 +472,16 @@ class SparseGPModel(FullGPModel):
         return logprior_fn_
 
 
-    # TODO rename? 
     def predict_f(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc', samples=None):
+        """
+        Placeholder method to call diff. predictive implementations.
+        """
+        return self.predict_f_max(key, x_pred, inference_mode='smc', samples=None)
+
+
+    def predict_f_original(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc', samples=None):
         """ see Rossi eq. 16
         """
-
-        # jax.debug.print('\n\n')
-        # jax.debug.print('predict_f sample keys {d}', d=list(priors.keys()))
-        # for k in priors.keys():
-        #     if isinstance(priors[k], dict):
-        #         jax.debug.print('{k}: {d}', k=k, d=list(priors[k].keys()))
-        #         for kk in priors[k].keys():
-        #             jax.debug.print('    {k}: {d}', k=kk, d=priors[k][kk].shape)
-        #     else:
-        #         jax.debug.print('{k}: {d}', k=k, d=priors[k].shape)
-        # jax.debug.print('\n\n')
-
         def sample_predictive(
                 key: PRNGKey,
                 x: Array,
@@ -501,6 +491,7 @@ class SparseGPModel(FullGPModel):
                 cov_params: Dict = None,
                 likelihood = None):
             """Sample latent f for new points x_pred given one posterior sample.
+            Using the FITC approximation
             """
             
             def compute_cov(in1, in2, jitter=True):
@@ -530,15 +521,19 @@ class SparseGPModel(FullGPModel):
             # compute alpha
             diag_noise = likelihood['obs_noise'] * jnp.eye(*cov_XX.shape)
 
-            XZ_ZZ_ZX = jnp.dot(
-                cov_XZ, 
-                jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ)))
+            # XZ_ZZ_ZX = jnp.dot(
+            #     cov_XZ, 
+            #     jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XZ)))
+            XZ_ZZ_ZX = compute_ab_invbb_ba(cov_XZ, cov_ZZ, use_cholesky=False)
             alpha = (cov_XX - XZ_ZZ_ZX + diag_noise) * jnp.eye(*cov_XX.shape)  # keeping only the values along the diagonal  # NOTE: Used jnp.eye instead of jnp.diag.
 
             # compute sigma fitc
-            sigma_fitc = cov_ZZ + jnp.dot(
-                jnp.transpose(cov_XZ), 
-                jnp.linalg.solve(alpha, cov_XZ))  # NOTE: in the paper this equation is inverted. I left it out to compute the inverse implicitly when Sigma is used. 
+            # NOTE: in the paper sigma_fitc is inverted. I left it out to compute the inverse implicitly when Sigma is used. 
+            # ZX_alpha_XZ = jnp.dot(
+            #     jnp.transpose(cov_XZ), 
+            #     jnp.linalg.solve(alpha, cov_XZ))
+            ZX_alpha_XZ = compute_ab_invbb_ba(cov_XZ.T, alpha, use_cholesky=False)
+            sigma_fitc = cov_ZZ + ZX_alpha_XZ  
 
             # compute mu fitc
             mu_fitc = jnp.dot(
@@ -549,18 +544,10 @@ class SparseGPModel(FullGPModel):
                 )
             )  # shape (num_targets, )
 
-            # compute variance (sigma^2) fitc
-            # XsZ_ZZ_ZXs = jnp.dot(
-            #     cov_XsZ,
-            #     jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XsZ)))
-            # XsZ_ZZ_ZXs += JITTER * jnp.eye(*Xs_ZZ_ZXs.shape)
+ 
             XsZ_ZZ_ZXs = compute_ab_invbb_ba(
                 cov_XsZ, cov_ZZ, use_cholesky=False)            
 
-            # XsZ_sigma_ZXs = jnp.dot(
-            #     cov_XsZ,
-            #     jnp.linalg.solve(sigma_fitc, jnp.transpose(cov_XsZ)))
-            # Xs_sigma_ZXs += JITTER * jnp.eye(*Xs_sigma_ZXs.shape)
             XsZ_sigma_ZXs = compute_ab_invbb_ba(
                 cov_XsZ, sigma_fitc, use_cholesky=False) 
             
@@ -603,6 +590,230 @@ class SparseGPModel(FullGPModel):
             xs = x_pred  # x*
             )
         
+        keys = jrnd.split(key, num_particles)
+        y_pred = jax.vmap(
+            jax.jit(sample_fun), 
+            in_axes=(0, cov_param_in_axes, 0, likelihood_in_axes))(
+                keys,
+                cov_params,
+                Z,
+                likelihood)
+
+        return y_pred
+    
+
+    def predict_f_max(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc', samples=None):
+        """ see Rossi eq. 16
+        """
+        def sample_predictive(
+                key: PRNGKey,
+                x: Array,
+                y: Array,
+                u: Array,
+                z: Array,
+                xs: Array,  # x*
+                cov_params: Dict = None,
+                likelihood = None):
+            """Sample latent f for new points x_pred given one posterior sample.
+            Using the FITC approximation
+            """
+            
+            def compute_cov(in1, in2, jitter=True):
+                """ Helper function for more consise code down the line
+                """
+                cov = self.cov_fn.cross_covariance(
+                    params=cov_params, x=in1, y=in2)
+                if jitter:
+                    cov += JITTER * jnp.eye(*cov.shape)
+                return cov
+
+            def compute_ab_invbb_ba(ab, bb, use_cholesky:bool = False):
+                if use_cholesky:
+                    L = jnp.linalg.cholesky(bb)
+                    v = jnp.linalg.solve(L, ab.T)
+                    return jnp.dot(v.T, v)
+                else:
+                    return jnp.dot(ab, jnp.linalg.solve(bb, ab.T))
+
+            # compute needed covariance matricies 
+            cov_ZZ = compute_cov(z, z)  # shape: (M, M)
+            cov_XsXs = compute_cov(xs, xs)  # shape: (num_targets, num_targets)
+            cov_XsZ = compute_cov(xs, z)  # shape: (num_targets, M)
+
+            mean = jnp.dot(cov_XsZ, jnp.linalg.solve(cov_ZZ, u))  # shape: (N)
+
+            diag_noise = likelihood['obs_noise'] * jnp.eye(*cov_XsXs.shape)
+            ZZ_ZX = jnp.linalg.solve(cov_ZZ, jnp.transpose(cov_XsZ))
+            var = jnp.diag(cov_XsXs - jnp.dot(cov_XsZ, ZZ_ZX)) + diag_noise
+
+            # draw samples
+            if jnp.ndim(xs) == 1:
+                L = jnp.linalg.cholesky(var)
+                u = jrnd.normal(key, shape=(len(xs),))
+                pred = mean + jnp.dot(L, u)
+            else:
+                raise NotImplementedError(f'Shape of target must be (n,)',
+                f'but {xs.shape} was provided.')
+
+            return pred
+
+        # extract parameters and samples from data structure
+        if samples:
+            samples = samples
+        else:
+            samples = self.get_monte_carlo_samples(mode=inference_mode)
+
+        cov_params = samples['kernel']
+        Z = samples['inducing_points']['Z']
+        u = samples['u']
+        likelihood = samples['likelihood']
+
+        num_particles = Z.shape[0]
+
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+        likelihood_in_axes = jax.tree_map(lambda l: 0, likelihood)
+
+        sample_fun = lambda key, cov_params, u, z, noise: sample_predictive(
+            key = key,
+            x = self.X,
+            y = self.y,
+            u = u,
+            z = z,
+            cov_params = cov_params,
+            likelihood = noise,
+            xs = x_pred  # x*
+            )
+        
+        keys = jrnd.split(key, num_particles)
+        y_pred = jax.vmap(
+            jax.jit(sample_fun), 
+            in_axes=(0, cov_param_in_axes, 0, 0, likelihood_in_axes))(
+                keys,
+                cov_params,
+                u,
+                Z,
+                likelihood)
+
+        return y_pred
+    
+
+    def predict_f_optimized(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc', samples=None):
+        """ see Rossi eq. 16
+        """
+        def sample_predictive(
+                key: PRNGKey,
+                x: Array,
+                y: Array,
+                z: Array,
+                xs: Array,  # x*
+                cov_params: Dict = None,
+                likelihood = None):
+            """Sample latent f for new points x_pred given one posterior sample.
+            Using the FITC approximation
+            """
+            
+            def compute_cov(in1, in2, jitter=True):
+                """ Helper function for more consise code down the line
+                """
+                cov = self.cov_fn.cross_covariance(
+                    params=cov_params, x=in1, y=in2)
+                if jitter:
+                    cov += JITTER * jnp.eye(*cov.shape)
+                return cov
+
+            def compute_ab_invbb_ba(ab, bb, use_cholesky:bool = False):
+                if use_cholesky:
+                    L = jnp.linalg.cholesky(bb)
+                    v = jnp.linalg.solve(L, ab.T)
+                    return jnp.dot(v.T, v)
+                else:
+                    return jnp.dot(ab, jnp.linalg.solve(bb, ab.T))
+
+            # compute needed covariance matricies 
+            cov_XX = compute_cov(x, x)  # shape: (N, N)
+            cov_ZZ = compute_cov(z, z)  # shape: (M, M)
+            cov_XZ = compute_cov(x, z)  # shape: (N, M)
+
+            # compute alpha
+            diag_noise = likelihood['obs_noise'] * jnp.eye(*cov_XX.shape)
+
+            XZ_ZZ_ZX = compute_ab_invbb_ba(cov_XZ, cov_ZZ, use_cholesky=False)
+            alpha = (cov_XX - XZ_ZZ_ZX + diag_noise) * jnp.eye(*cov_XX.shape)  # keeping only the values along the diagonal  # NOTE: Used jnp.eye instead of jnp.diag.
+
+            # compute sigma fitc
+            # NOTE: in the paper sigma_fitc is inverted. I left it out to compute the inverse implicitly when Sigma is used. 
+            ZX_alpha_XZ = compute_ab_invbb_ba(cov_XZ.T, alpha, use_cholesky=False)
+            sigma_fitc = cov_ZZ + ZX_alpha_XZ
+            
+            def compute_fitc(xs_):
+                cov_XsXs = compute_cov(xs_, xs_)  # shape: (num_targets, num_targets)
+                cov_XsZ = compute_cov(xs_, z)  # shape: (num_targets, M)
+
+                # compute mu fitc
+                mu_fitc = jnp.dot(
+                    cov_XsZ,
+                    jnp.dot(
+                        jnp.linalg.solve(sigma_fitc, jnp.transpose(cov_XZ)),
+                        jnp.linalg.solve(alpha, jnp.transpose(y))
+                    )
+                )  # shape (num_targets, )
+
+                XsZ_ZZ_ZXs = compute_ab_invbb_ba(
+                    cov_XsZ, cov_ZZ, use_cholesky=False)            
+
+                XsZ_sigma_ZXs = compute_ab_invbb_ba(
+                    cov_XsZ, sigma_fitc, use_cholesky=False) 
+                
+                var_fitc = cov_XsXs - XsZ_ZZ_ZXs + XsZ_sigma_ZXs  # shape (num_targets, num_targets)
+                var_fitc += JITTER * jnp.eye(*var_fitc.shape)
+                
+                return mu_fitc, var_fitc
+            
+            # keys = jrnd.split(key, xs.shape[0])
+            (mu_fitc, var_fitc) = jax.vmap(
+                jax.jit(compute_fitc), 
+                in_axes=(0))( jnp.expand_dims(xs, 1))
+
+            mu_fitc = mu_fitc.flatten()
+            var_fitc = jnp.reshape(var_fitc, (var_fitc.shape[0], var_fitc.shape[1]))
+
+            # draw samples
+            if jnp.ndim(xs) == 1:
+                L = jnp.linalg.cholesky(var_fitc)
+                u = jrnd.normal(key, shape=(len(xs),))
+                pred = mu_fitc + jnp.dot(L, u)
+            else:
+                raise NotImplementedError(f'Shape of target must be (n,)',
+                f'but {xs.shape} was provided.')
+
+            return pred
+
+        # extract parameters and samples from data structure
+        if samples:
+            samples = samples
+        else:
+            samples = self.get_monte_carlo_samples(mode=inference_mode)
+
+        cov_params = samples['kernel']
+        Z = samples['inducing_points']['Z']
+        likelihood = samples['likelihood']
+
+        num_particles = Z.shape[0]
+
+        cov_param_in_axes = jax.tree_map(lambda l: 0, cov_params)
+        likelihood_in_axes = jax.tree_map(lambda l: 0, likelihood)
+
+        sample_fun = lambda key, cov_params, z, noise: sample_predictive(
+            key = key,
+            x = self.X,
+            y = self.y,
+            z = z,
+            cov_params = cov_params,
+            likelihood = noise,
+            xs = x_pred  # x*
+            )
+
+        # with jax.disable_jit():
         keys = jrnd.split(key, num_particles)
         y_pred = jax.vmap(
             jax.jit(sample_fun), 
