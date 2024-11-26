@@ -20,7 +20,7 @@ os.environ['JAX_ENABLE_X64'] = 'True'
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.90'  # how much prereallocate
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"  # don't preallocate
-os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'  # allocate what is needed and free what is not
+# os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'  # allocate what is needed and free what is not
 
 import jax
 import jax.random as jrnd
