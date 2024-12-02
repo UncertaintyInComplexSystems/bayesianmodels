@@ -287,11 +287,11 @@ class BayesianModel(ABC):
             kernel_parameters = sampling_parameters.get('kernel_parameters')
 
             n = self.X.shape[0]
-            step_size=0.00005
-            batch_size=500
-            num_samples=1_000
+            step_size=0.0005
+            batch_size=100
+            num_samples=1_000_000
 
-            num_burn=50_000
+            num_burn=500_000
             num_thin=1
 
             # jax.debug.print('data:\n   {x},\n  {y}', x=self.X.shape, y=self.y.shape)
@@ -350,8 +350,8 @@ class BayesianModel(ABC):
             _, states = jax.lax.scan(one_step, initial_state, keys_loop)
 
             self.states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
-
-            return states
+            
+            return self.states
         
         else:
             raise NotImplementedError(f'{mode} is not implemented as inference method. Valid options are:\ngibbs-in-smc\ngibbs\nmcmc-in-smc\nmcmc')

@@ -911,7 +911,7 @@ def sparse_gp_inference_sghmc(
 
     #
     logging.info(f'generate predictive. ')
-    batch_size_pred = 1000
+    batch_size_pred = 500
 
     def batch_tree(batch_size, tree, num_datapoints):
         """
@@ -935,6 +935,7 @@ def sparse_gp_inference_sghmc(
     for i, cur_batch in enumerate(particle_batches):
         logging.info(f'predictive batch {i}/{len(particle_batches)}')
         _, key_pred = jrnd.split(key_pred)
+
         y_pred = gp_sparse.predict_f(
             key_pred, x_pred, inference_mode='mcmc', samples=cur_batch)
         y_pred_batches.append(y_pred)
@@ -955,24 +956,26 @@ def sparse_gp_inference_sghmc(
         title='Sparse GP\npredictive',
         folder=path)
 
-    # mse = mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
-    # logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
+    
 
     # pickle data and infernece output for combining the results later
     # logging.info('pickle data and inference output')
-    # to_pickle = dict(
-    #     x = x,
-    #     y = y,
-    #     x_pred = x_pred,
-    #     y_pred = y_pred,
-    #     ground_truth = ground_truth,
-    #     particles = particles)
+    to_pickle = dict(
+        x = x,
+        y = y,
+        x_pred = x_pred,
+        y_pred = y_pred,
+        ground_truth = ground_truth,
+        particles = particles)
     
-    # for dkey in to_pickle:
-    #     logging.debug('pickle ' + path+f'{dkey}.pickle')
-    #     with open(path+f'{dkey}.pickle', 'wb') as file_handle:
-    #         pickle.dump(
-    #             to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+    for dkey in to_pickle:
+        logging.debug('pickle ' + path+f'{dkey}.pickle')
+        with open(path+f'{dkey}.pickle', 'wb') as file_handle:
+            pickle.dump(
+                to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
+    mse = compute_mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
+    logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 
 
 def main(args):
@@ -1072,20 +1075,20 @@ def main(args):
 
 
     # sparse gp with MCMC-in-SMC
-    run_model(
-        seeds=random_random_seeds,
-        id='sparseGP',
-        num_runs = num_runs,
-        inference_fn=sparse_gp_inference,
-        root_path=path)
-    
-    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
     # run_model(
     #     seeds=random_random_seeds,
-    #     id='sparseGP_sghmc',
+    #     id='sparseGP',
     #     num_runs = num_runs,
-    #     inference_fn=sparse_gp_inference_sghmc,
+    #     inference_fn=sparse_gp_inference,
     #     root_path=path)
+    
+    # sparse gp with Stochastic gradient Hamiltonian Monte Carlo
+    run_model(
+        seeds=random_random_seeds,
+        id='sparseGP_sghmc',
+        num_runs = num_runs,
+        inference_fn=sparse_gp_inference_sghmc,
+        root_path=path)
 
     # run marginal gp
     # run_model(

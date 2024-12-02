@@ -476,7 +476,7 @@ class SparseGPModel(FullGPModel):
         """
         Placeholder method to call diff. predictive implementations.
         """
-        return self.predict_f_max(key, x_pred, inference_mode='smc', samples=None)
+        return self.predict_f_original(key, x_pred, inference_mode='smc', samples=samples)
 
 
     def predict_f_original(self, key: PRNGKey, x_pred: ArrayTree, inference_mode='smc', samples=None):
