@@ -175,7 +175,7 @@ def generate_smooth_gp(
 
     lengthscale_ = lengthscale
     output_scale_ = scale
-    x = jnp.linspace(-1, 1, n)[:, jnp.newaxis]
+    x = jnp.linspace(0, 1, n)[:, jnp.newaxis]
 
     kernel = jk.RBF()
     K = kernel.cross_covariance(
@@ -710,7 +710,8 @@ def sparse_gp_inference(
                 
         inducing_points=dict(
             Z=dx.Normal(
-                loc=jnp.zeros(shape=model_parameter['num_inducing_points']),
+                loc=jnp.ones(
+                    shape=model_parameter['num_inducing_points']) * 0.5,
                 scale=jnp.ones(
                     shape=model_parameter['num_inducing_points']) * jnp.var(x))  #NOTE: using jnp.var instead of jnp.std to produce Z's within the data range (-1, 1). 
                     )
@@ -726,7 +727,7 @@ def sparse_gp_inference(
     logging.info('run inference')
     key, key_inference = jrnd.split(key)
     start = timer()
-    particles, num_iter, marginal_likelihood = gp_sparse.inference(
+    initial_particles, particles, num_iter, marginal_likelihood = gp_sparse.inference(
         key_inference, 
         mode='gibbs-in-smc', 
         sampling_parameters=sampling_parameter)
@@ -745,10 +746,8 @@ def sparse_gp_inference(
 
     logging.info('generate predictive')
     key, key_pred = jrnd.split(key)
-    x_pred = jnp.linspace(-1, 1, num=x.shape[0])
+    x_pred = jnp.linspace(0, 1, num=x.shape[0])
     y_pred = gp_sparse.predict_f(key_pred, x_pred)
-
-    print(y_pred.shape)
 
     # plot results
     logging.info('generate plots')
@@ -773,8 +772,18 @@ def sparse_gp_inference(
         title='Sparse GP\npredictive',
         folder=path)
 
-    z = jnp.mean(particles.particles['inducing_points']['Z'], axis=0)
-    u = jnp.mean(particles.particles['u'], axis=0)
+    z_init = jnp.mean(initial_particles.position['inducing_points']['Z'], axis=0)
+    u_init = jnp.mean(initial_particles.position['u'], axis=0)
+    plot_predictive_f(
+        particles = particles.particles,
+        points_x=z_init, points_y=u_init, 
+        points_label='inducing points (mean)', points_color=colors['red'],
+        x_true=x, f_true=ground_truth.get('f'),
+        x_pred=x_pred,
+        y_pred=y_pred,
+        title='Sparse GP\ninital inducing points',
+        folder=path)
+    
     
     # # pickle data and infernece output for combining the results later
     logging.info('pickle data and inference output')
@@ -833,7 +842,7 @@ def sparse_gp_inference_sghmc(
                 
         inducing_points=dict(
             Z=dx.Normal(
-                loc=jnp.zeros(shape=model_parameter['num_inducing_points']),
+                loc=jnp.ones(shape=model_parameter['num_inducing_points']) * 0.5,
                 scale=jnp.ones(
                     shape=model_parameter['num_inducing_points']) * jnp.var(x))  #NOTE: using jnp.var instead of jnp.std to produce Z's within the data range (-1, 1). 
                     )
@@ -911,7 +920,7 @@ def sparse_gp_inference_sghmc(
 
     #
     logging.info(f'generate predictive. ')
-    batch_size_pred = 500
+    batch_size_particles = 4000
 
     def batch_tree(batch_size, tree, num_datapoints):
         """
@@ -926,12 +935,13 @@ def sparse_gp_inference_sghmc(
         return tree_batches
 
     key, key_pred = jrnd.split(key)
-    particle_batches=batch_tree(batch_size_pred, particles, particles['u'].shape[0])
+    particle_batches=batch_tree(batch_size_particles, particles, particles['u'].shape[0])
+
 
     num_pred = 100
-    x_pred = jnp.linspace(-1, 1, num=num_pred)
-
+    x_pred = jnp.linspace(0, 1, num=num_pred)
     y_pred_batches = []
+    start = timer()
     for i, cur_batch in enumerate(particle_batches):
         logging.info(f'predictive batch {i}/{len(particle_batches)}')
         _, key_pred = jrnd.split(key_pred)
@@ -941,6 +951,11 @@ def sparse_gp_inference_sghmc(
         y_pred_batches.append(y_pred)
     
     y_pred = jnp.concatenate(y_pred_batches, axis=0)
+
+    logging.info(
+        '{\'predictive_time_sec\': ' + f'{(timer() - start)}' + '}')
+    logging.info(
+        'predictive_time_min: ' + f'{(timer() - start)/60}')
 
 
     logging.info('plot predictive')
@@ -956,10 +971,8 @@ def sparse_gp_inference_sghmc(
         title='Sparse GP\npredictive',
         folder=path)
 
-    
-
     # pickle data and infernece output for combining the results later
-    # logging.info('pickle data and inference output')
+    logging.info('pickle data and inference output')
     to_pickle = dict(
         x = x,
         y = y,
@@ -973,7 +986,6 @@ def sparse_gp_inference_sghmc(
         with open(path+f'{dkey}.pickle', 'wb') as file_handle:
             pickle.dump(
                 to_pickle[dkey], file_handle, protocol=pickle.HIGHEST_PROTOCOL)
-            
     mse = compute_mse(jnp.mean(y_pred, axis=0), ground_truth.get('f'))
     logging.info('{\'mean_squared_error\': ' + f'{mse}' + '}')
 

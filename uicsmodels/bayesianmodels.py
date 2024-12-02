@@ -251,7 +251,7 @@ class BayesianModel(ABC):
             if include_trace:
                 return particles, num_iter, marginal_likelihood, trace, temperature
             
-            return particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
+            return initial_particles, particles, num_iter, marginal_likelihood  # NOTE: Modification for plotting.
         
         elif mode == 'gibbs' or mode == 'mcmc':
             num_burn = sampling_parameters.get('num_burn', 10_000)
@@ -287,11 +287,11 @@ class BayesianModel(ABC):
             kernel_parameters = sampling_parameters.get('kernel_parameters')
 
             n = self.X.shape[0]
-            step_size=0.0005
+            step_size=0.00005
             batch_size=100
             num_samples=1_000_000
 
-            num_burn=500_000
+            num_burn=num_samples//2
             num_thin=1
 
             # jax.debug.print('data:\n   {x},\n  {y}', x=self.X.shape, y=self.y.shape)
@@ -350,7 +350,6 @@ class BayesianModel(ABC):
             _, states = jax.lax.scan(one_step, initial_state, keys_loop)
 
             self.states = tree_map(lambda x: x[num_burn::num_thin, ...], states)
-            
             return self.states
         
         else:
